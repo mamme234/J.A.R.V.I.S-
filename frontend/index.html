@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JARVIS PRO - AI Assistant</title>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+    <!-- ========== LOGIN SCREEN ========== -->
+    <div id="loginScreen" class="login-container">
+        <div class="login-box glass">
+            <div class="login-header">
+                <div class="login-logo">
+                    <i class="fas fa-robot neon-icon"></i>
+                    <span class="pulse-ring"></span>
+                </div>
+                <h1>JARVIS</h1>
+                <p>Just A Rather Very Intelligent System</p>
+            </div>
+            <form id="loginForm">
+                <div class="input-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="username" placeholder="Username" required autocomplete="username" />
+                </div>
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="password" placeholder="Password" required autocomplete="current-password" />
+                </div>
+                <button type="submit" class="btn-primary">
+                    <span>Enter</span> <i class="fas fa-arrow-right"></i>
+                </button>
+                <p class="register-link">New user? <a href="#" id="showRegister">Create account</a></p>
+                <div id="loginError" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ========== MAIN DASHBOARD ========== -->
+    <div id="mainDashboard" style="display:none;">
+
+        <!-- SIDEBAR -->
+        <nav class="sidebar glass">
+            <div class="logo">
+                <i class="fas fa-robot neon-icon"></i>
+                <span>JARVIS</span>
+                <small>v2.0</small>
+            </div>
+            <ul class="nav-menu">
+                <li class="nav-item active" data-section="dashboard">
+                    <i class="fas fa-th-large"></i> <span>Dashboard</span>
+                </li>
+                <li class="nav-item" data-section="chat">
+                    <i class="fas fa-comment-dots"></i> <span>Chat</span>
+                </li>
+                <li class="nav-item" data-section="robot">
+                    <i class="fas fa-robot"></i> <span>Robot</span>
+                </li>
+                <li class="nav-item" data-section="settings">
+                    <i class="fas fa-cog"></i> <span>Settings</span>
+                </li>
+                <li class="nav-item" data-section="profile">
+                    <i class="fas fa-user-circle"></i> <span>Profile</span>
+                </li>
+            </ul>
+            <div class="sidebar-footer">
+                <div class="ai-status">
+                    <span class="status-dot online" id="statusDot"></span>
+                    <span id="aiStatusText">AI Online</span>
+                </div>
+                <button id="logoutBtn" class="btn-logout" title="Logout">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+            </div>
+        </nav>
+
+        <!-- MAIN CONTENT -->
+        <main class="main-content">
+
+            <!-- ===== DASHBOARD ===== -->
+            <section id="section-dashboard" class="content-section active">
+                <header class="section-header">
+                    <h2><i class="fas fa-th-large"></i> Dashboard</h2>
+                    <div class="header-actions">
+                        <span id="currentTime" class="time-display"></span>
+                        <button id="themeToggle" class="btn-icon"><i class="fas fa-moon"></i></button>
+                    </div>
+                </header>
+
+                <!-- Stats -->
+                <div class="stats-grid">
+                    <div class="stat-card glass">
+                        <i class="fas fa-microphone stat-icon"></i>
+                        <div>
+                            <h3 id="voiceCommands">0</h3>
+                            <p>Voice Commands</p>
+                        </div>
+                    </div>
+                    <div class="stat-card glass">
+                        <i class="fas fa-comments stat-icon"></i>
+                        <div>
+                            <h3 id="chatMessages">0</h3>
+                            <p>Chat Messages</p>
+                        </div>
+                    </div>
+                    <div class="stat-card glass">
+                        <i class="fas fa-brain stat-icon"></i>
+                        <div>
+                            <h3 id="aiResponses">0</h3>
+                            <p>AI Responses</p>
+                        </div>
+                    </div>
+                    <div class="stat-card glass">
+                        <i class="fas fa-clock stat-icon"></i>
+                        <div>
+                            <h3 id="uptime">--</h3>
+                            <p>Uptime</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Lamp & Hologram -->
+                <div class="dashboard-grid">
+                    <div class="lamp-container glass">
+                        <div class="lamp">
+                            <div class="lamp-base"></div>
+                            <div class="lamp-bulb" id="lampBulb">
+                                <div class="lamp-glow" id="lampGlow"></div>
+                            </div>
+                            <div class="lamp-shade"></div>
+                        </div>
+                        <p class="lamp-label">System: <span id="systemStatus" class="status-online">Operational</span></p>
+                    </div>
+
+                    <div class="hologram-container glass">
+                        <div class="hologram" id="hologram">
+                            <div class="hologram-ring"></div>
+                            <div class="hologram-ring"></div>
+                            <div class="hologram-ring"></div>
+                            <div class="hologram-core">
+                                <i class="fas fa-microchip"></i>
+                            </div>
+                        </div>
+                        <p class="hologram-label">AI Core: <span id="aiCoreStatus">Active</span></p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== CHAT ===== -->
+            <section id="section-chat" class="content-section">
+                <header class="section-header">
+                    <h2><i class="fas fa-comment-dots"></i> Chat</h2>
+                    <div class="header-actions">
+                        <select id="aiModelSelect" class="model-select">
+                            <option value="openai">GPT-4</option>
+                            <option value="gemini">Gemini</option>
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="claude">Claude</option>
+                        </select>
+                    </div>
+                </header>
+
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="message ai-message">
+                            <div class="message-avatar"><i class="fas fa-robot"></i></div>
+                            <div class="message-content">
+                                <p>Hello! I'm Jarvis. How can I assist you today?</p>
+                                <span class="message-time">Just now</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="chat-input-container">
+                        <button id="voiceBtn" class="btn-voice" title="Voice Input">
+                            <i class="fas fa-microphone"></i>
+                        </button>
+                        <input type="text" id="chatInput" placeholder="Type a message..." autocomplete="off" />
+                        <button id="sendBtn" class="btn-send">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                        <button id="ttsBtn" class="btn-tts" title="Text to Speech">
+                            <i class="fas fa-volume-up"></i>
+                        </button>
+                    </div>
+                    <div id="voiceStatus" class="voice-status" style="display:none;">
+                        <span class="pulse-dot"></span> Listening...
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== ROBOT 3D ===== -->
+            <section id="section-robot" class="content-section">
+                <header class="section-header">
+                    <h2><i class="fas fa-robot"></i> 3D Robot</h2>
+                    <div class="header-actions">
+                        <button class="btn-robot-anim" data-anim="idle">Idle</button>
+                        <button class="btn-robot-anim" data-anim="walk">Walk</button>
+                        <button class="btn-robot-anim" data-anim="talk">Talk</button>
+                        <button class="btn-robot-anim" data-anim="think">Think</button>
+                    </div>
+                </header>
+                <div class="robot-container">
+                    <canvas id="robotCanvas" class="robot-canvas"></canvas>
+                    <div class="robot-overlay">
+                        <div class="eye-indicator">
+                            <span class="eye" id="leftEye"></span>
+                            <span class="eye" id="rightEye"></span>
+                        </div>
+                        <div class="robot-status">
+                            Status: <span id="robotStatus">Idle</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== SETTINGS ===== -->
+            <section id="section-settings" class="content-section">
+                <header class="section-header">
+                    <h2><i class="fas fa-cog"></i> Settings</h2>
+                </header>
+                <div class="settings-grid">
+                    <div class="settings-card glass">
+                        <h3><i class="fas fa-palette"></i> Theme</h3>
+                        <div class="theme-options">
+                            <button class="theme-option active" data-theme="dark">Dark</button>
+                            <button class="theme-option" data-theme="light">Light</button>
+                            <button class="theme-option" data-theme="neon">Neon</button>
+                        </div>
+                    </div>
+                    <div class="settings-card glass">
+                        <h3><i class="fas fa-voice"></i> Voice Settings</h3>
+                        <label>Speed</label>
+                        <input type="range" id="voiceSpeed" min="0.5" max="2" step="0.1" value="1" />
+                        <label>Pitch</label>
+                        <input type="range" id="voicePitch" min="0.5" max="2" step="0.1" value="1" />
+                    </div>
+                    <div class="settings-card glass">
+                        <h3><i class="fas fa-key"></i> API Keys</h3>
+                        <input type="password" id="openaiKey" placeholder="OpenAI API Key" />
+                        <input type="password" id="geminiKey" placeholder="Gemini API Key" />
+                        <button id="saveKeys" class="btn-primary">Save Keys</button>
+                    </div>
+                    <div class="settings-card glass">
+                        <h3><i class="fas fa-database"></i> Data</h3>
+                        <button id="clearHistory" class="btn-danger">Clear History</button>
+                        <button id="exportData" class="btn-primary">Export Data</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== PROFILE ===== -->
+            <section id="section-profile" class="content-section">
+                <header class="section-header">
+                    <h2><i class="fas fa-user-circle"></i> Profile</h2>
+                </header>
+                <div class="profile-container glass">
+                    <div class="profile-avatar">
+                        <i class="fas fa-user-circle"></i>
+                    </div>
+                    <div class="profile-info">
+                        <h3 id="profileUsername">User</h3>
+                        <p id="profileEmail">user@email.com</p>
+                        <div class="profile-stats">
+                            <div><span id="profileMessages">0</span> Messages</div>
+                            <div><span id="profileCommands">0</span> Commands</div>
+                            <div><span id="profileJoined">--</span> Joined</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- ========== THREE.JS for Robot ========== -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="script.js"></script>
+</body>
+                  </html>
