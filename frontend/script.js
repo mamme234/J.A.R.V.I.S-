@@ -1,6 +1,6 @@
 // ============================================================
 // JARVIS PRO - Complete Frontend Controller
-// WITH PROCEDURAL 3D ROBOT (No external GLB file needed)
+// WITH RENDER BACKEND SUPPORT
 // ============================================================
 
 class JarvisApp {
@@ -16,9 +16,21 @@ class JarvisApp {
         this.synth = window.speechSynthesis;
         this.robotAnim = 'idle';
         this.eyeBlinkInterval = null;
-        this.robotParts = {}; // Store robot parts for animation
+        this.robotParts = {};
         this.animationTime = 0;
         this.isRobotInitialized = false;
+        
+        // === PERSONALIZATION ===
+        this.userName = localStorage.getItem('jarvis_user_name') || 'User';
+        this.aiName = localStorage.getItem('jarvis_ai_name') || 'Jarvis';
+        
+        // === BACKEND CONFIGURATION ===
+        // Your Render backend URL
+        this.apiBase = 'https://j-a-r-v-i-s-66ks.onrender.com';
+        this.isBackendOnline = false;
+        this.retryCount = 0;
+        this.maxRetries = 3;
+        this.backendCheckInterval = null;
 
         this.init();
     }
@@ -33,6 +45,151 @@ class JarvisApp {
         this.loadStats();
         this.initParticles();
         this.initLampAnimation();
+        this.applyPersonalization();
+        
+        // Check backend health on startup
+        this.checkBackendHealth();
+        
+        // Re-check every 30 seconds
+        this.backendCheckInterval = setInterval(() => {
+            this.checkBackendHealth();
+        }, 30000);
+    }
+
+    // -------- Backend Health Check --------
+    async checkBackendHealth() {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            
+            const response = await fetch(`${this.apiBase}/api/health`, {
+                method: 'GET',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+                const data = await response.json();
+                this.isBackendOnline = true;
+                this.retryCount = 0;
+                console.log('✅ Backend is online:', this.apiBase);
+                console.log('📊 Backend status:', data);
+                this.updateBackendStatus(true);
+                
+                // Remove offline banner if exists
+                const banner = document.getElementById('offlineModeBanner');
+                if (banner) banner.remove();
+                
+                return true;
+            } else {
+                throw new Error(`Status: ${response.status} - ${response.statusText}`);
+            }
+        } catch (error) {
+            this.isBackendOnline = false;
+            console.warn('⚠️ Backend unavailable:', error.message);
+            this.updateBackendStatus(false);
+            
+            // Retry with exponential backoff
+            if (this.retryCount < this.maxRetries) {
+                this.retryCount++;
+                const delay = Math.pow(2, this.retryCount) * 3000;
+                console.log(`🔄 Retrying in ${delay/1000}s (attempt ${this.retryCount}/${this.maxRetries})`);
+                setTimeout(() => this.checkBackendHealth(), delay);
+            } else {
+                console.warn('❌ Backend unreachable after max retries.');
+                this.showOfflineMode();
+            }
+            return false;
+        }
+    }
+
+    updateBackendStatus(isOnline) {
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('aiStatusText');
+        const systemStatus = document.getElementById('systemStatus');
+        const aiCoreStatus = document.getElementById('aiCoreStatus');
+        
+        if (statusDot) {
+            statusDot.className = `status-dot ${isOnline ? 'online' : 'offline'}`;
+        }
+        if (statusText) {
+            statusText.textContent = isOnline ? 'AI Online' : 'AI Offline';
+            statusText.style.color = isOnline ? 'var(--text-secondary)' : '#ff4444';
+        }
+        if (systemStatus) {
+            systemStatus.textContent = isOnline ? 'Operational' : 'Offline';
+            systemStatus.className = isOnline ? 'status-online' : 'status-offline';
+        }
+        if (aiCoreStatus) {
+            aiCoreStatus.textContent = isOnline ? 'Active' : 'Inactive';
+            aiCoreStatus.style.color = isOnline ? '#00ff88' : '#ff4444';
+        }
+    }
+
+    showOfflineMode() {
+        // Remove existing banner
+        const existingBanner = document.getElementById('offlineModeBanner');
+        if (existingBanner) existingBanner.remove();
+
+        // Show persistent notification
+        const notification = document.createElement('div');
+        notification.id = 'offlineModeBanner';
+        notification.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, #ff4444, #cc0000);
+            color: white;
+            text-align: center;
+            font-size: 14px;
+            z-index: 9999;
+            font-weight: 600;
+            animation: slideDown 0.5s ease-out;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        `;
+        notification.innerHTML = `
+            <span>⚠️ Backend is unavailable (503). Running in offline/demo mode.</span>
+            <button onclick="this.parentElement.remove()" style="
+                background: rgba(255,255,255,0.2);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.3);
+                padding: 6px 18px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+                font-size: 13px;
+            ">Dismiss</button>
+            <button onclick="window.jarvis.checkBackendHealth()" style="
+                background: white;
+                color: #cc0000;
+                border: none;
+                padding: 6px 18px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+                font-size: 13px;
+            ">🔄 Retry</button>
+        `;
+        document.body.prepend(notification);
+
+        // Only add message if not already shown
+        if (!this._offlineMessageShown) {
+            this._offlineMessageShown = true;
+            setTimeout(() => {
+                this.addMessage('ai', '⚠️ I\'m running in offline mode. The backend server is unavailable (503 error). Please check your connection or try again later. You can still use the interface in demo mode.');
+            }, 1000);
+        }
     }
 
     // -------- DOM Caching --------
@@ -81,6 +238,19 @@ class JarvisApp {
             themeOptions: document.querySelectorAll('.theme-option'),
             navItems: document.querySelectorAll('.nav-item'),
             robotAnims: document.querySelectorAll('.btn-robot-anim'),
+            welcomeName: document.getElementById('welcomeName'),
+            welcomeMessage: document.getElementById('welcomeMessage'),
+            welcomeChatMessage: document.getElementById('welcomeChatMessage'),
+            chatName: document.getElementById('chatName'),
+            robotName: document.getElementById('robotName'),
+            sidebarName: document.getElementById('sidebarName'),
+            appTitle: document.getElementById('appTitle'),
+            appSubtitle: document.getElementById('appSubtitle'),
+            userNameInput: document.getElementById('userNameInput'),
+            aiNameInput: document.getElementById('aiNameInput'),
+            saveNameBtn: document.getElementById('saveNameBtn'),
+            saveAINameBtn: document.getElementById('saveAINameBtn'),
+            autoSpeak: document.getElementById('autoSpeak'),
         };
     }
 
@@ -122,6 +292,27 @@ class JarvisApp {
         this.elements.saveKeys.addEventListener('click', () => this.saveAPIKeys());
         this.elements.clearHistory.addEventListener('click', () => this.clearChatHistory());
         this.elements.exportData.addEventListener('click', () => this.exportUserData());
+        
+        // Personalization
+        this.elements.saveNameBtn.addEventListener('click', () => this.saveUserName());
+        this.elements.saveAINameBtn.addEventListener('click', () => this.saveAIName());
+        this.elements.userNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.saveUserName();
+        });
+        this.elements.aiNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.saveAIName();
+        });
+
+        // Auto-speak
+        this.elements.autoSpeak.addEventListener('change', (e) => {
+            localStorage.setItem('autoSpeak', e.target.checked);
+        });
+
+        // Register link
+        document.getElementById('showRegister')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.showRegisterForm();
+        });
 
         // Window resize for robot
         window.addEventListener('resize', () => this.resizeRobot());
@@ -130,32 +321,62 @@ class JarvisApp {
     // -------- Authentication --------
     async handleLogin(e) {
         e.preventDefault();
-        const username = this.elements.username.value;
-        const password = this.elements.password.value;
+        const username = this.elements.username.value.trim();
+        const password = this.elements.password.value.trim();
+
+        if (!username || !password) {
+            this.elements.loginError.textContent = 'Please enter username and password';
+            return;
+        }
+
+        // Check if backend is online
+        if (!this.isBackendOnline) {
+            await this.checkBackendHealth();
+            if (!this.isBackendOnline) {
+                this.elements.loginError.textContent = '⚠️ Server offline. Please try again later.';
+                return;
+            }
+        }
 
         try {
-            const response = await fetch('/api/login', {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+            const response = await fetch(`${this.apiBase}/api/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
+                body: JSON.stringify({ username, password }),
+                signal: controller.signal
             });
+            
+            clearTimeout(timeoutId);
             const data = await response.json();
 
             if (data.success) {
                 this.isLoggedIn = true;
+                this.userName = username;
+                localStorage.setItem('jarvis_user_name', username);
+                
                 this.elements.loginScreen.style.display = 'none';
                 this.elements.mainDashboard.style.display = 'block';
-                this.elements.profileUsername.textContent = username;
-                this.elements.profileEmail.textContent = data.email || 'user@email.com';
-                this.elements.profileJoined.textContent = data.joined || 'Today';
+                
+                this.applyPersonalization();
                 this.loadChatHistory();
                 this.updateStats();
                 this.startLampAnimation();
+                
+                // Store token
+                if (data.token) {
+                    localStorage.setItem('jarvis_token', data.token);
+                }
             } else {
                 this.elements.loginError.textContent = data.message || 'Login failed';
             }
         } catch (error) {
-            this.elements.loginError.textContent = 'Connection error. Please try again.';
+            console.error('Login error:', error);
+            this.elements.loginError.textContent = error.name === 'AbortError' 
+                ? 'Request timeout. Server may be down.' 
+                : 'Connection error. Please try again.';
         }
     }
 
@@ -165,7 +386,16 @@ class JarvisApp {
         this.elements.loginScreen.style.display = 'flex';
         this.elements.loginForm.reset();
         this.elements.loginError.textContent = '';
+        localStorage.removeItem('jarvis_token');
         this.stopLampAnimation();
+    }
+
+    showRegisterForm() {
+        this.elements.loginError.textContent = 'Registration: Create account with username and password';
+        this.elements.loginError.style.color = '#00ff88';
+        setTimeout(() => {
+            this.elements.loginError.style.color = '#ff4444';
+        }, 5000);
     }
 
     // -------- Navigation --------
@@ -178,9 +408,62 @@ class JarvisApp {
             el.classList.toggle('active', el.id === `section-${section}`);
         });
 
-        // Resize robot canvas when switching to robot section
         if (section === 'robot' && this.isRobotInitialized) {
             setTimeout(() => this.resizeRobot(), 100);
+        }
+    }
+
+    // -------- Personalization --------
+    applyPersonalization() {
+        const name = this.userName || 'User';
+        const ai = this.aiName || 'Jarvis';
+        
+        // Update all name instances
+        if (this.elements.welcomeName) this.elements.welcomeName.textContent = name;
+        if (this.elements.welcomeMessage) {
+            this.elements.welcomeMessage.textContent = `How can I assist you today, ${name}?`;
+        }
+        if (this.elements.welcomeChatMessage) {
+            this.elements.welcomeChatMessage.textContent = `Hello ${name}! I'm ${ai}. How can I assist you today?`;
+        }
+        if (this.elements.chatName) this.elements.chatName.textContent = ai;
+        if (this.elements.robotName) this.elements.robotName.textContent = ai;
+        if (this.elements.sidebarName) this.elements.sidebarName.textContent = ai.toUpperCase();
+        if (this.elements.appTitle) this.elements.appTitle.textContent = ai.toUpperCase();
+        if (this.elements.appSubtitle) {
+            this.elements.appSubtitle.textContent = `Your Personal AI Assistant, ${name}`;
+        }
+        if (this.elements.userNameInput) this.elements.userNameInput.value = name;
+        if (this.elements.aiNameInput) this.elements.aiNameInput.value = ai;
+        if (this.elements.profileUsername) this.elements.profileUsername.textContent = name;
+        
+        // Update chat placeholder
+        if (this.elements.chatInput) {
+            this.elements.chatInput.placeholder = `Type a message to ${ai}...`;
+        }
+    }
+
+    saveUserName() {
+        const name = this.elements.userNameInput.value.trim();
+        if (name) {
+            this.userName = name;
+            localStorage.setItem('jarvis_user_name', name);
+            this.applyPersonalization();
+            this.showNotification('Name saved successfully!');
+        } else {
+            this.showNotification('Please enter a valid name');
+        }
+    }
+
+    saveAIName() {
+        const name = this.elements.aiNameInput.value.trim();
+        if (name) {
+            this.aiName = name;
+            localStorage.setItem('jarvis_ai_name', name);
+            this.applyPersonalization();
+            this.showNotification('AI name saved successfully!');
+        } else {
+            this.showNotification('Please enter a valid name');
         }
     }
 
@@ -196,21 +479,48 @@ class JarvisApp {
 
         this.chatHistory.push({ role: 'user', content: text });
         this.updateStats();
-
-        // Set robot to think mode
         this.setRobotAnim('think');
 
         try {
+            // Check backend
+            if (!this.isBackendOnline) {
+                await this.checkBackendHealth();
+                if (!this.isBackendOnline) {
+                    this.addMessage('ai', '⚠️ Backend is offline. Please check your connection and try again.');
+                    this.setRobotAnim('idle');
+                    input.disabled = false;
+                    input.focus();
+                    return;
+                }
+            }
+
             const model = this.elements.aiModelSelect.value;
-            const response = await fetch('/api/chat', {
+            const token = localStorage.getItem('jarvis_token');
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+            const response = await fetch(`${this.apiBase}/api/chat`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': token ? `Bearer ${token}` : ''
+                },
                 body: JSON.stringify({
                     message: text,
                     model: model,
                     history: this.chatHistory.slice(-10)
-                })
+                }),
+                signal: controller.signal
             });
+            
+            clearTimeout(timeoutId);
+
+            if (response.status === 503) {
+                this.isBackendOnline = false;
+                this.updateBackendStatus(false);
+                throw new Error('Service unavailable (503)');
+            }
 
             const data = await response.json();
 
@@ -219,15 +529,12 @@ class JarvisApp {
                 this.chatHistory.push({ role: 'assistant', content: data.response });
                 this.aiResponses++;
                 this.updateStats();
-
-                // Set robot to talk mode
                 this.setRobotAnim('talk');
                 
-                if (localStorage.getItem('autoSpeak') === 'true') {
+                if (this.elements.autoSpeak.checked) {
                     this.speakText(data.response);
                 }
 
-                // Return to idle after 3 seconds
                 setTimeout(() => {
                     if (this.robotAnim === 'talk') {
                         this.setRobotAnim('idle');
@@ -238,8 +545,16 @@ class JarvisApp {
                 this.setRobotAnim('idle');
             }
         } catch (error) {
+            console.error('Chat error:', error);
             this.setRobotAnim('idle');
-            this.addMessage('ai', '⚠️ Connection error. Please check your network.');
+            
+            if (error.name === 'AbortError') {
+                this.addMessage('ai', '⚠️ Request timeout. The server may be experiencing issues.');
+            } else if (error.message.includes('503')) {
+                this.addMessage('ai', '⚠️ Service unavailable (503). The backend server is down. Please try again later.');
+            } else {
+                this.addMessage('ai', '⚠️ Connection error. Please check your network.');
+            }
         }
 
         input.disabled = false;
@@ -253,11 +568,16 @@ class JarvisApp {
 
         const avatar = document.createElement('div');
         avatar.className = 'message-avatar';
-        avatar.innerHTML = role === 'user' ? '<i class="fas fa-user"></i>' : '<i class="fas fa-robot"></i>';
+        avatar.innerHTML = role === 'user' 
+            ? `<i class="fas fa-user"></i>` 
+            : `<i class="fas fa-robot"></i>`;
 
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
-        contentDiv.innerHTML = `<p>${content}</p><span class="message-time">${new Date().toLocaleTimeString()}</span>`;
+        contentDiv.innerHTML = `
+            <p>${content}</p>
+            <span class="message-time">${new Date().toLocaleTimeString()}</span>
+        `;
 
         div.appendChild(avatar);
         div.appendChild(contentDiv);
@@ -340,7 +660,6 @@ class JarvisApp {
             this.isListening = true;
             this.setRobotAnim('listening');
             
-            // Auto-stop after 10 seconds
             setTimeout(() => {
                 if (this.isListening) {
                     this.recognition.stop();
@@ -385,15 +704,11 @@ class JarvisApp {
         if (text) this.speakText(text);
     }
 
-    // ============================================================
-    // 3D ROBOT - Procedural Creation (No GLB file needed!)
-    // ============================================================
-    
+    // -------- 3D Robot --------
     initRobot3D() {
         const canvas = this.elements.robotCanvas;
         if (!canvas) return;
 
-        // Scene setup
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({
@@ -406,8 +721,6 @@ class JarvisApp {
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.2;
 
         // Lighting
         const ambientLight = new THREE.AmbientLight(0x404060, 0.5);
@@ -416,8 +729,6 @@ class JarvisApp {
         const mainLight = new THREE.DirectionalLight(0x00f0ff, 1.2);
         mainLight.position.set(5, 10, 7);
         mainLight.castShadow = true;
-        mainLight.shadow.mapSize.width = 1024;
-        mainLight.shadow.mapSize.height = 1024;
         scene.add(mainLight);
 
         const fillLight = new THREE.DirectionalLight(0x4466ff, 0.5);
@@ -428,15 +739,11 @@ class JarvisApp {
         rimLight.position.set(0, -2, -5);
         scene.add(rimLight);
 
-        const backLight = new THREE.PointLight(0x00f0ff, 0.3);
-        backLight.position.set(0, 2, -5);
-        scene.add(backLight);
-
-        // Create the robot
+        // Create robot
         const robotGroup = this.createProceduralRobot();
         scene.add(robotGroup);
 
-        // Floor grid
+        // Grid
         const gridHelper = new THREE.GridHelper(4, 20, 0x00f0ff, 0x003366);
         gridHelper.position.y = -0.1;
         gridHelper.material.opacity = 0.3;
@@ -447,17 +754,14 @@ class JarvisApp {
         const particlesGeo = new THREE.BufferGeometry();
         const particlesCount = 1000;
         const posArray = new Float32Array(particlesCount * 3);
-        const colorArray = new Float32Array(particlesCount * 3);
         for (let i = 0; i < particlesCount * 3; i++) {
             posArray[i] = (Math.random() - 0.5) * 15;
-            colorArray[i] = Math.random() * 0.5 + 0.5;
         }
         particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-        particlesGeo.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
         
         const particlesMat = new THREE.PointsMaterial({
             size: 0.03,
-            vertexColors: true,
+            color: 0x00f0ff,
             transparent: true,
             opacity: 0.6,
             blending: THREE.AdditiveBlending
@@ -465,11 +769,9 @@ class JarvisApp {
         const particlesMesh = new THREE.Points(particlesGeo, particlesMat);
         scene.add(particlesMesh);
 
-        // Camera position
         camera.position.set(2.5, 1.8, 4);
         camera.lookAt(0, 1.2, 0);
 
-        // Store references
         this.robotScene = scene;
         this.robotGroup = robotGroup;
         this.robotRenderer = renderer;
@@ -477,19 +779,14 @@ class JarvisApp {
         this.robotParticles = particlesMesh;
         this.robotCanvas = canvas;
 
-        // Start animation loop
         this.isRobotInitialized = true;
         this.animateRobot();
 
-        // Initial blink
         setTimeout(() => this.blinkEyes(), 1000);
-
-        // Blink interval
         this.eyeBlinkInterval = setInterval(() => {
             this.blinkEyes();
         }, 4000);
 
-        // Resize handler
         this.resizeRobot();
     }
 
@@ -497,7 +794,6 @@ class JarvisApp {
         const group = new THREE.Group();
         const parts = {};
 
-        // ===== MATERIALS =====
         const materials = {
             body: new THREE.MeshPhysicalMaterial({
                 color: 0x1a1a3a,
@@ -505,8 +801,7 @@ class JarvisApp {
                 roughness: 0.2,
                 emissive: 0x002244,
                 emissiveIntensity: 0.2,
-                clearcoat: 0.3,
-                clearcoatRoughness: 0.4
+                clearcoat: 0.3
             }),
             bodyDark: new THREE.MeshPhysicalMaterial({
                 color: 0x0a0a2a,
@@ -531,13 +826,6 @@ class JarvisApp {
                 transparent: true,
                 opacity: 0.9
             }),
-            joint: new THREE.MeshPhysicalMaterial({
-                color: 0x444466,
-                metalness: 0.6,
-                roughness: 0.4,
-                emissive: 0x112233,
-                emissiveIntensity: 0.1
-            }),
             eye: new THREE.MeshPhysicalMaterial({
                 color: 0x00f0ff,
                 emissive: 0x00f0ff,
@@ -556,7 +844,7 @@ class JarvisApp {
             })
         };
 
-        // ===== BODY =====
+        // Body
         const bodyGeo = new THREE.BoxGeometry(1.4, 1.8, 0.9);
         const body = new THREE.Mesh(bodyGeo, materials.body);
         body.position.y = 1.0;
@@ -565,22 +853,14 @@ class JarvisApp {
         group.add(body);
         parts.body = body;
 
-        // Body details - chest plate
+        // Chest plate
         const chestGeo = new THREE.BoxGeometry(0.8, 0.5, 0.08);
         const chest = new THREE.Mesh(chestGeo, materials.chest);
         chest.position.set(0, 1.1, 0.47);
         group.add(chest);
         parts.chest = chest;
 
-        // Body accent lines
-        for (let i = 0; i < 3; i++) {
-            const lineGeo = new THREE.BoxGeometry(0.02, 0.3, 0.02);
-            const line = new THREE.Mesh(lineGeo, materials.accent);
-            line.position.set(-0.3 + i * 0.3, 0.8, 0.46);
-            group.add(line);
-        }
-
-        // ===== HEAD =====
+        // Head
         const headGeo = new THREE.SphereGeometry(0.55, 32, 32);
         const head = new THREE.Mesh(headGeo, materials.bodyDark);
         head.position.y = 2.0;
@@ -589,16 +869,15 @@ class JarvisApp {
         group.add(head);
         parts.head = head;
 
-        // Head visor
+        // Visor
         const visorGeo = new THREE.BoxGeometry(0.5, 0.2, 0.1);
         const visor = new THREE.Mesh(visorGeo, materials.accent);
         visor.position.set(0, 1.95, 0.5);
         group.add(visor);
         parts.visor = visor;
 
-        // ===== EYES =====
+        // Eyes
         const eyeGeo = new THREE.SphereGeometry(0.08, 16, 16);
-        
         const eyeL = new THREE.Mesh(eyeGeo, materials.eye);
         eyeL.position.set(-0.15, 2.05, 0.5);
         group.add(eyeL);
@@ -609,24 +888,7 @@ class JarvisApp {
         group.add(eyeR);
         parts.eyeR = eyeR;
 
-        // Eye glow rings
-        const ringGeo = new THREE.RingGeometry(0.1, 0.13, 16);
-        const ringMat = new THREE.MeshBasicMaterial({
-            color: 0x00f0ff,
-            transparent: true,
-            opacity: 0.3,
-            side: THREE.DoubleSide
-        });
-        
-        const ringL = new THREE.Mesh(ringGeo, ringMat);
-        ringL.position.set(-0.15, 2.05, 0.52);
-        group.add(ringL);
-        
-        const ringR = new THREE.Mesh(ringGeo, ringMat);
-        ringR.position.set(0.15, 2.05, 0.52);
-        group.add(ringR);
-
-        // ===== ANTENNA =====
+        // Antenna
         const antennaMat = new THREE.MeshPhysicalMaterial({
             color: 0x00f0ff,
             emissive: 0x00f0ff,
@@ -634,7 +896,6 @@ class JarvisApp {
             metalness: 0.8,
             roughness: 0.2
         });
-        
         const antennaGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.4);
         const antenna = new THREE.Mesh(antennaGeo, antennaMat);
         antenna.position.set(0, 2.3, 0);
@@ -647,7 +908,7 @@ class JarvisApp {
         group.add(tip);
         parts.tip = tip;
 
-        // ===== ARMS =====
+        // Arms
         const armMat = new THREE.MeshPhysicalMaterial({
             color: 0x222244,
             metalness: 0.7,
@@ -656,7 +917,6 @@ class JarvisApp {
             emissiveIntensity: 0.1
         });
         const armGeo = new THREE.BoxGeometry(0.25, 0.9, 0.25);
-        
         const armL = new THREE.Mesh(armGeo, armMat);
         armL.position.set(-0.85, 1.3, 0);
         armL.castShadow = true;
@@ -669,25 +929,7 @@ class JarvisApp {
         group.add(armR);
         parts.armR = armR;
 
-        // Shoulder joints
-        const jointGeo = new THREE.SphereGeometry(0.12, 12, 12);
-        const jointMat = new THREE.MeshPhysicalMaterial({
-            color: 0x00f0ff,
-            metalness: 0.8,
-            roughness: 0.2,
-            emissive: 0x00f0ff,
-            emissiveIntensity: 0.2
-        });
-        
-        const jointL = new THREE.Mesh(jointGeo, jointMat);
-        jointL.position.set(-0.85, 1.7, 0);
-        group.add(jointL);
-        
-        const jointR = new THREE.Mesh(jointGeo, jointMat);
-        jointR.position.set(0.85, 1.7, 0);
-        group.add(jointR);
-
-        // ===== HANDS =====
+        // Hands
         const handMat = new THREE.MeshPhysicalMaterial({
             color: 0x00f0ff,
             emissive: 0x00f0ff,
@@ -696,7 +938,6 @@ class JarvisApp {
             roughness: 0.1
         });
         const handGeo = new THREE.SphereGeometry(0.1, 8, 8);
-        
         const handL = new THREE.Mesh(handGeo, handMat);
         handL.position.set(-0.85, 0.85, 0);
         group.add(handL);
@@ -707,7 +948,7 @@ class JarvisApp {
         group.add(handR);
         parts.handR = handR;
 
-        // ===== LEGS =====
+        // Legs
         const legMat = new THREE.MeshPhysicalMaterial({
             color: 0x1a1a3a,
             metalness: 0.6,
@@ -716,7 +957,6 @@ class JarvisApp {
             emissiveIntensity: 0.1
         });
         const legGeo = new THREE.BoxGeometry(0.35, 0.7, 0.35);
-        
         const legL = new THREE.Mesh(legGeo, legMat);
         legL.position.set(-0.35, 0.35, 0);
         legL.castShadow = true;
@@ -731,16 +971,13 @@ class JarvisApp {
         group.add(legR);
         parts.legR = legR;
 
-        // ===== FEET =====
+        // Feet
         const footMat = new THREE.MeshPhysicalMaterial({
             color: 0x444466,
             metalness: 0.5,
-            roughness: 0.5,
-            emissive: 0x001122,
-            emissiveIntensity: 0.05
+            roughness: 0.5
         });
         const footGeo = new THREE.BoxGeometry(0.4, 0.12, 0.5);
-        
         const footL = new THREE.Mesh(footGeo, footMat);
         footL.position.set(-0.35, 0, 0.05);
         footL.castShadow = true;
@@ -755,7 +992,7 @@ class JarvisApp {
         group.add(footR);
         parts.footR = footR;
 
-        // ===== GLOW RING (floating) =====
+        // Glow rings
         const glowRingGeo = new THREE.TorusGeometry(0.8, 0.025, 16, 48);
         const glowRingMat = new THREE.MeshPhysicalMaterial({
             color: 0x00f0ff,
@@ -773,7 +1010,6 @@ class JarvisApp {
         group.add(glowRing);
         parts.glowRing = glowRing;
 
-        // Second ring (smaller, angled)
         const glowRing2Geo = new THREE.TorusGeometry(0.6, 0.015, 16, 48);
         const glowRing2Mat = new THREE.MeshPhysicalMaterial({
             color: 0xff6bff,
@@ -792,56 +1028,29 @@ class JarvisApp {
         group.add(glowRing2);
         parts.glowRing2 = glowRing2;
 
-        // ===== SPINE LIGHTS =====
-        for (let i = 0; i < 5; i++) {
-            const lightGeo = new THREE.SphereGeometry(0.03, 8, 8);
-            const lightMat = new THREE.MeshPhysicalMaterial({
-                color: 0x00f0ff,
-                emissive: 0x00f0ff,
-                emissiveIntensity: 0.5 + i * 0.1,
-                transparent: true,
-                opacity: 0.8
-            });
-            const light = new THREE.Mesh(lightGeo, lightMat);
-            light.position.set(0, 0.3 + i * 0.3, 0.47);
-            group.add(light);
-        }
-
-        // Store all parts for animation
-        this.robotParts = parts;
-
-        // Scale the entire robot
         group.scale.set(0.8, 0.8, 0.8);
         group.position.y = 0.1;
 
+        this.robotParts = parts;
         return group;
     }
 
-    // ============================================================
-    // ROBOT ANIMATION
-    // ============================================================
-
+    // -------- Robot Animation --------
     animateRobot() {
         if (!this.isRobotInitialized) return;
 
         const animate = () => {
             if (!this.isRobotInitialized) return;
-            
             requestAnimationFrame(animate);
-            
             this.animationTime += 0.01;
             const time = this.animationTime;
 
-            // Animate based on current state
             this.updateRobotAnimation(time);
 
-            // Rotate particles
             if (this.robotParticles) {
                 this.robotParticles.rotation.y += 0.0005;
-                this.robotParticles.rotation.x = Math.sin(time * 0.1) * 0.02;
             }
 
-            // Render
             if (this.robotRenderer && this.robotScene && this.robotCamera) {
                 this.robotRenderer.render(this.robotScene, this.robotCamera);
             }
@@ -857,134 +1066,46 @@ class JarvisApp {
         const group = this.robotGroup;
         if (!group) return;
 
-        // Default positions for reference
-        const defaultPos = {
-            armL: { x: -0.85, y: 1.3, z: 0 },
-            armR: { x: 0.85, y: 1.3, z: 0 },
-            legL: { x: -0.35, y: 0.35, z: 0 },
-            legR: { x: 0.35, y: 0.35, z: 0 },
-            head: { y: 2.0 },
-            body: { y: 1.0 }
-        };
-
         switch (this.robotAnim) {
             case 'idle':
-                // Gentle floating and swaying
                 group.position.y = 0.1 + Math.sin(time * 0.6) * 0.03;
                 group.rotation.z = Math.sin(time * 0.4) * 0.015;
-                group.rotation.x = Math.sin(time * 0.3) * 0.01;
-                
-                // Subtle arm sway
-                if (parts.armL) {
-                    parts.armL.rotation.x = Math.sin(time * 0.8) * 0.05;
-                    parts.armL.rotation.z = Math.sin(time * 0.5 + 1) * 0.03;
-                }
-                if (parts.armR) {
-                    parts.armR.rotation.x = Math.sin(time * 0.8 + Math.PI) * 0.05;
-                    parts.armR.rotation.z = Math.sin(time * 0.5) * 0.03;
-                }
-                
-                // Eye glow pulse
+                if (parts.armL) parts.armL.rotation.x = Math.sin(time * 0.8) * 0.05;
+                if (parts.armR) parts.armR.rotation.x = Math.sin(time * 0.8 + Math.PI) * 0.05;
                 if (parts.eyeL && parts.eyeR) {
                     const pulse = 0.7 + Math.sin(time * 2) * 0.3;
                     parts.eyeL.material.emissiveIntensity = pulse;
                     parts.eyeR.material.emissiveIntensity = pulse;
                 }
-                
-                // Ring rotation
-                if (parts.glowRing) {
-                    parts.glowRing.rotation.z += 0.01;
-                }
-                if (parts.glowRing2) {
-                    parts.glowRing2.rotation.y += 0.008;
-                    parts.glowRing2.rotation.x = Math.PI / 3 + Math.sin(time * 0.3) * 0.05;
-                }
+                if (parts.glowRing) parts.glowRing.rotation.z += 0.01;
                 break;
 
             case 'walk':
-                // Walking motion
                 group.position.y = 0.1 + Math.abs(Math.sin(time * 3)) * 0.08;
-                
-                // Legs alternate
-                if (parts.legL) {
-                    parts.legL.rotation.x = Math.sin(time * 3) * 0.4;
-                    parts.legL.position.y = 0.35 + Math.abs(Math.sin(time * 3)) * 0.05;
-                }
-                if (parts.legR) {
-                    parts.legR.rotation.x = Math.sin(time * 3 + Math.PI) * 0.4;
-                    parts.legR.position.y = 0.35 + Math.abs(Math.sin(time * 3 + Math.PI)) * 0.05;
-                }
-                
-                // Arms swing opposite to legs
-                if (parts.armL) {
-                    parts.armL.rotation.x = Math.sin(time * 3 + Math.PI) * 0.4;
-                    parts.armL.rotation.z = Math.sin(time * 2) * 0.05;
-                }
-                if (parts.armR) {
-                    parts.armR.rotation.x = Math.sin(time * 3) * 0.4;
-                    parts.armR.rotation.z = Math.sin(time * 2 + Math.PI) * 0.05;
-                }
-                
-                // Body bob
-                if (parts.body) {
-                    parts.body.position.y = 1.0 + Math.abs(Math.sin(time * 3)) * 0.02;
-                }
-                
-                // Rings spin faster
-                if (parts.glowRing) {
-                    parts.glowRing.rotation.z += 0.03;
-                }
+                if (parts.legL) parts.legL.rotation.x = Math.sin(time * 3) * 0.4;
+                if (parts.legR) parts.legR.rotation.x = Math.sin(time * 3 + Math.PI) * 0.4;
+                if (parts.armL) parts.armL.rotation.x = Math.sin(time * 3 + Math.PI) * 0.4;
+                if (parts.armR) parts.armR.rotation.x = Math.sin(time * 3) * 0.4;
                 break;
 
             case 'talk':
-                // Head and body bob
                 if (parts.head) {
                     parts.head.position.y = 2.0 + Math.sin(time * 6) * 0.02;
                     parts.head.rotation.x = Math.sin(time * 5) * 0.02;
                 }
-                if (parts.body) {
-                    parts.body.position.y = 1.0 + Math.sin(time * 6) * 0.015;
-                }
-                
-                // Arms gesture
-                if (parts.armL) {
-                    parts.armL.rotation.x = -0.2 + Math.sin(time * 4) * 0.2;
-                    parts.armL.rotation.z = Math.sin(time * 3) * 0.08;
-                }
-                if (parts.armR) {
-                    parts.armR.rotation.x = -0.2 + Math.sin(time * 4 + Math.PI) * 0.2;
-                    parts.armR.rotation.z = Math.sin(time * 3 + 1) * 0.08;
-                }
-                
-                // Eyes glow with speech
+                if (parts.armL) parts.armL.rotation.x = -0.2 + Math.sin(time * 4) * 0.2;
+                if (parts.armR) parts.armR.rotation.x = -0.2 + Math.sin(time * 4 + Math.PI) * 0.2;
                 if (parts.eyeL && parts.eyeR) {
                     const pulse = 0.6 + Math.sin(time * 6) * 0.4;
                     parts.eyeL.material.emissiveIntensity = pulse;
                     parts.eyeR.material.emissiveIntensity = pulse;
                 }
-                
-                // Visor pulse
-                if (parts.visor) {
-                    parts.visor.material.opacity = 0.6 + Math.sin(time * 5) * 0.3;
-                }
-                
-                // Rings pulse
-                if (parts.glowRing) {
-                    const scale = 1 + Math.sin(time * 4) * 0.03;
-                    parts.glowRing.scale.x = scale;
-                    parts.glowRing.scale.y = scale;
-                    parts.glowRing.material.opacity = 0.5 + Math.sin(time * 4) * 0.2;
-                }
                 break;
 
             case 'think':
-                // Tilt head
                 if (parts.head) {
                     parts.head.rotation.z = Math.sin(time * 0.3) * 0.05;
-                    parts.head.rotation.x = Math.sin(time * 0.2) * 0.03;
                 }
-                
-                // Arms crossed/in thinking pose
                 if (parts.armL) {
                     parts.armL.rotation.x = -0.5 + Math.sin(time * 0.5) * 0.05;
                     parts.armL.rotation.z = 0.3 + Math.sin(time * 0.3) * 0.05;
@@ -993,65 +1114,24 @@ class JarvisApp {
                     parts.armR.rotation.x = -0.5 + Math.sin(time * 0.5 + 1) * 0.05;
                     parts.armR.rotation.z = -0.3 + Math.sin(time * 0.3 + 1) * 0.05;
                 }
-                
-                // Eyes slowly pulse
-                if (parts.eyeL && parts.eyeR) {
-                    const pulse = 0.4 + Math.sin(time * 0.5) * 0.2;
-                    parts.eyeL.material.emissiveIntensity = pulse;
-                    parts.eyeR.material.emissiveIntensity = pulse;
-                }
-                
-                // Rings pulse slowly
                 if (parts.glowRing) {
                     const scale = 1 + Math.sin(time * 0.5) * 0.05;
                     parts.glowRing.scale.x = scale;
                     parts.glowRing.scale.y = scale;
-                    parts.glowRing.scale.z = scale;
-                }
-                if (parts.glowRing2) {
-                    const scale = 1 + Math.sin(time * 0.4 + 1) * 0.05;
-                    parts.glowRing2.scale.x = scale;
-                    parts.glowRing2.scale.y = scale;
-                    parts.glowRing2.scale.z = scale;
-                }
-                
-                // Slight body sway
-                if (parts.body) {
-                    parts.body.position.y = 1.0 + Math.sin(time * 0.2) * 0.02;
                 }
                 break;
 
             case 'listening':
-                // Head tilt (curious)
                 if (parts.head) {
                     parts.head.rotation.z = Math.sin(time * 0.5) * 0.03;
-                    parts.head.rotation.x = Math.sin(time * 0.3) * 0.02;
                     parts.head.position.y = 2.0 + Math.sin(time * 0.4) * 0.015;
                 }
-                
-                // Arms open/listening pose
-                if (parts.armL) {
-                    parts.armL.rotation.x = -0.2 + Math.sin(time * 0.5) * 0.1;
-                    parts.armL.rotation.z = -0.2 + Math.sin(time * 0.4) * 0.05;
-                }
-                if (parts.armR) {
-                    parts.armR.rotation.x = -0.2 + Math.sin(time * 0.5 + 1) * 0.1;
-                    parts.armR.rotation.z = 0.2 + Math.sin(time * 0.4 + 1) * 0.05;
-                }
-                
-                // Eyes bright and pulsing
+                if (parts.armL) parts.armL.rotation.x = -0.2 + Math.sin(time * 0.5) * 0.1;
+                if (parts.armR) parts.armR.rotation.x = -0.2 + Math.sin(time * 0.5 + 1) * 0.1;
                 if (parts.eyeL && parts.eyeR) {
                     const pulse = 0.8 + Math.sin(time * 1.5) * 0.2;
                     parts.eyeL.material.emissiveIntensity = pulse;
                     parts.eyeR.material.emissiveIntensity = pulse;
-                }
-                
-                // Rings rotate
-                if (parts.glowRing) {
-                    parts.glowRing.rotation.z += 0.02;
-                }
-                if (parts.glowRing2) {
-                    parts.glowRing2.rotation.y += 0.015;
                 }
                 break;
 
@@ -1062,8 +1142,6 @@ class JarvisApp {
 
     setRobotAnim(anim) {
         this.robotAnim = anim;
-        
-        // Update status text
         const statusMap = {
             'idle': 'Idle',
             'walk': 'Walking',
@@ -1071,39 +1149,24 @@ class JarvisApp {
             'think': 'Thinking',
             'listening': 'Listening...'
         };
-        
         if (this.elements.robotStatus) {
             this.elements.robotStatus.textContent = statusMap[anim] || anim;
         }
-
-        // Update button states
         this.elements.robotAnims.forEach(btn => {
             btn.classList.toggle('active', btn.dataset.anim === anim);
         });
-
-        // Trigger eye animation for specific states
-        if (anim === 'think') {
-            // Thinking eyes - slow blink
-            setTimeout(() => this.blinkEyes(), 500);
-        }
     }
 
     blinkEyes() {
         const parts = this.robotParts;
         if (!parts || !parts.eyeL || !parts.eyeR) return;
 
-        // Store original scales
-        const origScaleL = parts.eyeL.scale.y;
-        const origScaleR = parts.eyeR.scale.y;
-
-        // Close eyes
         parts.eyeL.scale.y = 0.1;
         parts.eyeR.scale.y = 0.1;
         
-        // Open after 150ms
         setTimeout(() => {
-            parts.eyeL.scale.y = origScaleL || 1;
-            parts.eyeR.scale.y = origScaleR || 1;
+            parts.eyeL.scale.y = 1;
+            parts.eyeR.scale.y = 1;
         }, 150);
     }
 
@@ -1111,11 +1174,8 @@ class JarvisApp {
         if (!this.isRobotInitialized || !this.robotCanvas) return;
 
         const canvas = this.robotCanvas;
-        const parent = canvas.parentElement;
-        const rect = parent ? parent.getBoundingClientRect() : { width: canvas.clientWidth, height: canvas.clientHeight };
-        
-        const width = rect.width || canvas.clientWidth || 400;
-        const height = rect.height || canvas.clientHeight || 400;
+        const width = canvas.clientWidth || 400;
+        const height = canvas.clientHeight || 400;
 
         if (this.robotRenderer) {
             this.robotRenderer.setSize(width, height);
@@ -1128,23 +1188,18 @@ class JarvisApp {
         }
     }
 
-    // ============================================================
-    // LAMP ANIMATION
-    // ============================================================
-
+    // -------- Lamp Animation --------
     initLampAnimation() {
         this.lampInterval = null;
     }
 
     startLampAnimation() {
         this.stopLampAnimation();
-        
         const bulb = this.elements.lampBulb;
         const glow = this.elements.lampGlow;
         if (!bulb) return;
 
         let state = 'on';
-        
         this.lampInterval = setInterval(() => {
             if (state === 'on') {
                 bulb.classList.remove('off');
@@ -1154,9 +1209,7 @@ class JarvisApp {
                 if (glow) {
                     const currentOpacity = parseFloat(glow.style.opacity) || 1;
                     glow.style.opacity = Math.max(0.2, currentOpacity - 0.05);
-                    if (currentOpacity <= 0.3) {
-                        state = 'off';
-                    }
+                    if (currentOpacity <= 0.3) state = 'off';
                 }
             } else if (state === 'off') {
                 bulb.classList.add('off');
@@ -1177,16 +1230,10 @@ class JarvisApp {
         }
     }
 
-    // -------- Particles (Background) --------
+    // -------- Particles --------
     initParticles() {
         const canvas = document.createElement('canvas');
-        canvas.style.position = 'fixed';
-        canvas.style.top = '0';
-        canvas.style.left = '0';
-        canvas.style.width = '100%';
-        canvas.style.height = '100%';
-        canvas.style.pointerEvents = 'none';
-        canvas.style.zIndex = '-1';
+        canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:-1;';
         document.body.prepend(canvas);
 
         const ctx = canvas.getContext('2d');
@@ -1226,9 +1273,7 @@ class JarvisApp {
             }
         }
 
-        for (let i = 0; i < count; i++) {
-            particles.push(new Particle());
-        }
+        for (let i = 0; i < count; i++) particles.push(new Particle());
 
         const drawLines = () => {
             for (let i = 0; i < particles.length; i++) {
@@ -1250,10 +1295,7 @@ class JarvisApp {
 
         const animateParticles = () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            particles.forEach(p => {
-                p.update();
-                p.draw();
-            });
+            particles.forEach(p => { p.update(); p.draw(); });
             drawLines();
             requestAnimationFrame(animateParticles);
         };
@@ -1280,15 +1322,13 @@ class JarvisApp {
         this.elements.voiceCommands.textContent = this.voiceCommands;
         this.elements.aiResponses.textContent = this.aiResponses;
 
-        // Uptime
         const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
         const hours = Math.floor(elapsed / 3600);
         const minutes = Math.floor((elapsed % 3600) / 60);
         const seconds = elapsed % 60;
-        this.elements.uptime.textContent =
+        this.elements.uptime.textContent = 
             `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
-        // Profile stats
         if (this.elements.profileMessages) {
             this.elements.profileMessages.textContent = this.elements.chatMessagesCount.textContent || 0;
         }
@@ -1316,11 +1356,13 @@ class JarvisApp {
 
     loadChatHistory() {
         this.chatHistory = [];
+        const ai = this.aiName || 'Jarvis';
+        const name = this.userName || 'User';
         this.elements.chatMessages.innerHTML = `
             <div class="message ai-message">
                 <div class="message-avatar"><i class="fas fa-robot"></i></div>
                 <div class="message-content">
-                    <p>Welcome back! How can I help you today?</p>
+                    <p>Hello ${name}! I'm ${ai}. How can I assist you today?</p>
                     <span class="message-time">Just now</span>
                 </div>
             </div>
@@ -1385,11 +1427,13 @@ class JarvisApp {
 
     clearChatHistory() {
         if (confirm('Clear all chat history?')) {
+            const ai = this.aiName || 'Jarvis';
+            const name = this.userName || 'User';
             this.elements.chatMessages.innerHTML = `
                 <div class="message ai-message">
                     <div class="message-avatar"><i class="fas fa-robot"></i></div>
                     <div class="message-content">
-                        <p>Chat history cleared. How can I help you?</p>
+                        <p>Chat history cleared. Hello ${name}! How can I help you?</p>
                         <span class="message-time">Just now</span>
                     </div>
                 </div>
@@ -1433,6 +1477,7 @@ class JarvisApp {
             font-size: 14px; z-index: 9999;
             backdrop-filter: blur(20px);
             animation: slideIn 0.3s ease-out;
+            max-width: 400px;
         `;
         div.textContent = message;
         document.body.appendChild(div);
@@ -1452,6 +1497,9 @@ class JarvisApp {
         if (this.lampInterval) {
             clearInterval(this.lampInterval);
         }
+        if (this.backendCheckInterval) {
+            clearInterval(this.backendCheckInterval);
+        }
         if (this.recognition) {
             try { this.recognition.stop(); } catch (e) {}
         }
@@ -1469,9 +1517,13 @@ document.addEventListener('DOMContentLoaded', () => {
     window.jarvis = new JarvisApp();
 });
 
-// Add CSS animation for notifications
+// Add CSS animations
 const style = document.createElement('style');
 style.textContent = `
+    @keyframes slideDown {
+        from { transform: translateY(-100%); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+    }
     @keyframes slideIn {
         from { transform: translateX(100px); opacity: 0; }
         to { transform: translateX(0); opacity: 1; }
