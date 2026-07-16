@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: jarvis-pro
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm install --prefix backend
+    startCommand: node backend/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: CLAUDE_API_KEY
+        sync: false
+    autoDeploy: true
