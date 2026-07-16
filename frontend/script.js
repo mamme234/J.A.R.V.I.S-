@@ -1,5 +1,6 @@
 // ============================================================
 // JARVIS PRO - Complete Frontend Controller
+// WITH PROCEDURAL 3D ROBOT (No external GLB file needed)
 // ============================================================
 
 class JarvisApp {
@@ -15,6 +16,9 @@ class JarvisApp {
         this.synth = window.speechSynthesis;
         this.robotAnim = 'idle';
         this.eyeBlinkInterval = null;
+        this.robotParts = {}; // Store robot parts for animation
+        this.animationTime = 0;
+        this.isRobotInitialized = false;
 
         this.init();
     }
@@ -28,6 +32,7 @@ class JarvisApp {
         this.loadTheme();
         this.loadStats();
         this.initParticles();
+        this.initLampAnimation();
     }
 
     // -------- DOM Caching --------
@@ -117,6 +122,9 @@ class JarvisApp {
         this.elements.saveKeys.addEventListener('click', () => this.saveAPIKeys());
         this.elements.clearHistory.addEventListener('click', () => this.clearChatHistory());
         this.elements.exportData.addEventListener('click', () => this.exportUserData());
+
+        // Window resize for robot
+        window.addEventListener('resize', () => this.resizeRobot());
     }
 
     // -------- Authentication --------
@@ -142,6 +150,7 @@ class JarvisApp {
                 this.elements.profileJoined.textContent = data.joined || 'Today';
                 this.loadChatHistory();
                 this.updateStats();
+                this.startLampAnimation();
             } else {
                 this.elements.loginError.textContent = data.message || 'Login failed';
             }
@@ -156,19 +165,23 @@ class JarvisApp {
         this.elements.loginScreen.style.display = 'flex';
         this.elements.loginForm.reset();
         this.elements.loginError.textContent = '';
+        this.stopLampAnimation();
     }
 
     // -------- Navigation --------
     navigateTo(section) {
-        // Update nav items
         this.elements.navItems.forEach(item => {
             item.classList.toggle('active', item.dataset.section === section);
         });
 
-        // Show section
         document.querySelectorAll('.content-section').forEach(el => {
             el.classList.toggle('active', el.id === `section-${section}`);
         });
+
+        // Resize robot canvas when switching to robot section
+        if (section === 'robot' && this.isRobotInitialized) {
+            setTimeout(() => this.resizeRobot(), 100);
+        }
     }
 
     // -------- Chat System --------
@@ -177,14 +190,15 @@ class JarvisApp {
         const text = input.value.trim();
         if (!text) return;
 
-        // Add user message to UI
         this.addMessage('user', text);
         input.value = '';
         input.disabled = true;
 
-        // Update stats
         this.chatHistory.push({ role: 'user', content: text });
         this.updateStats();
+
+        // Set robot to think mode
+        this.setRobotAnim('think');
 
         try {
             const model = this.elements.aiModelSelect.value;
@@ -199,20 +213,32 @@ class JarvisApp {
             });
 
             const data = await response.json();
+
             if (data.success) {
                 this.addMessage('ai', data.response);
                 this.chatHistory.push({ role: 'assistant', content: data.response });
                 this.aiResponses++;
                 this.updateStats();
 
-                // Auto-speak if enabled
+                // Set robot to talk mode
+                this.setRobotAnim('talk');
+                
                 if (localStorage.getItem('autoSpeak') === 'true') {
                     this.speakText(data.response);
                 }
+
+                // Return to idle after 3 seconds
+                setTimeout(() => {
+                    if (this.robotAnim === 'talk') {
+                        this.setRobotAnim('idle');
+                    }
+                }, 3000);
             } else {
                 this.addMessage('ai', '⚠️ Error: ' + (data.message || 'Unknown error'));
+                this.setRobotAnim('idle');
             }
         } catch (error) {
+            this.setRobotAnim('idle');
             this.addMessage('ai', '⚠️ Connection error. Please check your network.');
         }
 
@@ -238,7 +264,6 @@ class JarvisApp {
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
 
-        // Update message count
         const count = parseInt(this.elements.chatMessagesCount.textContent) || 0;
         this.elements.chatMessagesCount.textContent = count + 1;
     }
@@ -278,6 +303,7 @@ class JarvisApp {
             this.elements.voiceStatus.style.display = 'none';
             this.elements.voiceBtn.classList.remove('listening');
             this.isListening = false;
+            this.setRobotAnim('idle');
             if (event.error !== 'not-allowed') {
                 this.elements.voiceStatus.textContent = '⚠️ Error: ' + event.error;
                 this.elements.voiceStatus.style.display = 'block';
@@ -291,6 +317,9 @@ class JarvisApp {
             this.elements.voiceStatus.style.display = 'none';
             this.elements.voiceBtn.classList.remove('listening');
             this.isListening = false;
+            if (this.robotAnim === 'listening') {
+                this.setRobotAnim('idle');
+            }
         };
     }
 
@@ -302,12 +331,21 @@ class JarvisApp {
             this.elements.voiceStatus.style.display = 'none';
             this.elements.voiceBtn.classList.remove('listening');
             this.isListening = false;
+            this.setRobotAnim('idle');
         } else {
             this.recognition.start();
             this.elements.voiceStatus.style.display = 'flex';
             this.elements.voiceStatus.innerHTML = '<span class="pulse-dot"></span> Listening... Speak now';
             this.elements.voiceBtn.classList.add('listening');
             this.isListening = true;
+            this.setRobotAnim('listening');
+            
+            // Auto-stop after 10 seconds
+            setTimeout(() => {
+                if (this.isListening) {
+                    this.recognition.stop();
+                }
+            }, 10000);
         }
     }
 
@@ -315,7 +353,6 @@ class JarvisApp {
     speakText(text) {
         if (!this.synth) return;
 
-        // Cancel any ongoing speech
         this.synth.cancel();
 
         const utterance = new SpeechSynthesisUtterance(text);
@@ -323,10 +360,19 @@ class JarvisApp {
         utterance.pitch = parseFloat(this.elements.voicePitch.value) || 1;
         utterance.volume = 1;
 
-        // Try to find a good voice
         const voices = this.synth.getVoices();
         const preferred = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google'));
         if (preferred) utterance.voice = preferred;
+
+        utterance.onstart = () => {
+            this.setRobotAnim('talk');
+        };
+
+        utterance.onend = () => {
+            if (this.robotAnim === 'talk') {
+                this.setRobotAnim('idle');
+            }
+        };
 
         this.synth.speak(utterance);
     }
@@ -339,9 +385,15 @@ class JarvisApp {
         if (text) this.speakText(text);
     }
 
-    // -------- 3D Robot --------
+    // ============================================================
+    // 3D ROBOT - Procedural Creation (No GLB file needed!)
+    // ============================================================
+    
     initRobot3D() {
         const canvas = this.elements.robotCanvas;
+        if (!canvas) return;
+
+        // Scene setup
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({
@@ -351,37 +403,61 @@ class JarvisApp {
         });
 
         renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
 
         // Lighting
         const ambientLight = new THREE.AmbientLight(0x404060, 0.5);
         scene.add(ambientLight);
 
-        const mainLight = new THREE.DirectionalLight(0x00f0ff, 1);
+        const mainLight = new THREE.DirectionalLight(0x00f0ff, 1.2);
         mainLight.position.set(5, 10, 7);
         mainLight.castShadow = true;
+        mainLight.shadow.mapSize.width = 1024;
+        mainLight.shadow.mapSize.height = 1024;
         scene.add(mainLight);
 
-        const backLight = new THREE.PointLight(0xff6bff, 0.5);
-        backLight.position.set(-3, 1, -5);
+        const fillLight = new THREE.DirectionalLight(0x4466ff, 0.5);
+        fillLight.position.set(-5, 2, 5);
+        scene.add(fillLight);
+
+        const rimLight = new THREE.DirectionalLight(0xff6bff, 0.4);
+        rimLight.position.set(0, -2, -5);
+        scene.add(rimLight);
+
+        const backLight = new THREE.PointLight(0x00f0ff, 0.3);
+        backLight.position.set(0, 2, -5);
         scene.add(backLight);
 
-        const fillLight = new THREE.DirectionalLight(0x4466ff, 0.3);
-        fillLight.position.set(-3, 2, 4);
-        scene.add(fillLight);
+        // Create the robot
+        const robotGroup = this.createProceduralRobot();
+        scene.add(robotGroup);
+
+        // Floor grid
+        const gridHelper = new THREE.GridHelper(4, 20, 0x00f0ff, 0x003366);
+        gridHelper.position.y = -0.1;
+        gridHelper.material.opacity = 0.3;
+        gridHelper.material.transparent = true;
+        scene.add(gridHelper);
 
         // Particles
         const particlesGeo = new THREE.BufferGeometry();
-        const particlesCount = 1500;
+        const particlesCount = 1000;
         const posArray = new Float32Array(particlesCount * 3);
+        const colorArray = new Float32Array(particlesCount * 3);
         for (let i = 0; i < particlesCount * 3; i++) {
-            posArray[i] = (Math.random() - 0.5) * 20;
+            posArray[i] = (Math.random() - 0.5) * 15;
+            colorArray[i] = Math.random() * 0.5 + 0.5;
         }
         particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        particlesGeo.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+        
         const particlesMat = new THREE.PointsMaterial({
-            size: 0.02,
-            color: 0x00f0ff,
+            size: 0.03,
+            vertexColors: true,
             transparent: true,
             opacity: 0.6,
             blending: THREE.AdditiveBlending
@@ -389,208 +465,594 @@ class JarvisApp {
         const particlesMesh = new THREE.Points(particlesGeo, particlesMat);
         scene.add(particlesMesh);
 
-        // Robot model placeholder (simple geometry)
-        const robotGroup = new THREE.Group();
+        // Camera position
+        camera.position.set(2.5, 1.8, 4);
+        camera.lookAt(0, 1.2, 0);
 
-        // Body
-        const bodyGeo = new THREE.BoxGeometry(1.2, 1.6, 0.8);
-        const bodyMat = new THREE.MeshPhongMaterial({
-            color: 0x1a1a3a,
-            metalness: 0.8,
-            roughness: 0.2,
-            emissive: 0x002244,
-            emissiveIntensity: 0.3
-        });
-        const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.y = 0.8;
-        body.castShadow = true;
-        robotGroup.add(body);
-
-        // Head
-        const headGeo = new THREE.SphereGeometry(0.5, 32, 32);
-        const headMat = new THREE.MeshPhongMaterial({
-            color: 0x2a2a4a,
-            metalness: 0.9,
-            roughness: 0.1,
-            emissive: 0x0044aa,
-            emissiveIntensity: 0.2
-        });
-        const head = new THREE.Mesh(headGeo, headMat);
-        head.position.y = 1.8;
-        head.castShadow = true;
-        robotGroup.add(head);
-
-        // Eyes (glowing)
-        const eyeMat = new THREE.MeshPhongMaterial({
-            color: 0x00f0ff,
-            emissive: 0x00f0ff,
-            emissiveIntensity: 0.8
-        });
-        const eyeGeo = new THREE.SphereGeometry(0.08, 16, 16);
-        const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
-        eyeL.position.set(-0.15, 1.9, 0.45);
-        robotGroup.add(eyeL);
-
-        const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
-        eyeR.position.set(0.15, 1.9, 0.45);
-        robotGroup.add(eyeR);
-
-        // Arms
-        const armMat = new THREE.MeshPhongMaterial({
-            color: 0x222244,
-            metalness: 0.7,
-            roughness: 0.3
-        });
-        const armGeo = new THREE.BoxGeometry(0.2, 0.8, 0.2);
-
-        const armL = new THREE.Mesh(armGeo, armMat);
-        armL.position.set(-0.7, 1.2, 0);
-        robotGroup.add(armL);
-
-        const armR = new THREE.Mesh(armGeo, armMat);
-        armR.position.set(0.7, 1.2, 0);
-        robotGroup.add(armR);
-
-        // Legs
-        const legMat = new THREE.MeshPhongMaterial({
-            color: 0x1a1a3a,
-            metalness: 0.6,
-            roughness: 0.4
-        });
-        const legGeo = new THREE.BoxGeometry(0.3, 0.6, 0.3);
-
-        const legL = new THREE.Mesh(legGeo, legMat);
-        legL.position.set(-0.3, 0.3, 0);
-        robotGroup.add(legL);
-
-        const legR = new THREE.Mesh(legGeo, legMat);
-        legR.position.set(0.3, 0.3, 0);
-        robotGroup.add(legR);
-
-        // Glow ring around robot
-        const ringGeo = new THREE.TorusGeometry(0.9, 0.02, 16, 32);
-        const ringMat = new THREE.MeshPhongMaterial({
-            color: 0x00f0ff,
-            emissive: 0x00f0ff,
-            emissiveIntensity: 0.3,
-            transparent: true,
-            opacity: 0.6
-        });
-        const ring = new THREE.Mesh(ringGeo, ringMat);
-        ring.position.y = 0.8;
-        ring.rotation.x = Math.PI / 2;
-        robotGroup.add(ring);
-
-        scene.add(robotGroup);
-
-        camera.position.set(2, 1.5, 3.5);
-        camera.lookAt(0, 1, 0);
-
-        // Store references for animation
+        // Store references
         this.robotScene = scene;
         this.robotGroup = robotGroup;
         this.robotRenderer = renderer;
         this.robotCamera = camera;
         this.robotParticles = particlesMesh;
-        this.robotRing = ring;
-        this.robotArms = [armL, armR];
-        this.robotLegs = [legL, legR];
-        this.robotEyes = [eyeL, eyeR];
+        this.robotCanvas = canvas;
 
-        // Animation loop
-        let time = 0;
+        // Start animation loop
+        this.isRobotInitialized = true;
+        this.animateRobot();
+
+        // Initial blink
+        setTimeout(() => this.blinkEyes(), 1000);
+
+        // Blink interval
+        this.eyeBlinkInterval = setInterval(() => {
+            this.blinkEyes();
+        }, 4000);
+
+        // Resize handler
+        this.resizeRobot();
+    }
+
+    createProceduralRobot() {
+        const group = new THREE.Group();
+        const parts = {};
+
+        // ===== MATERIALS =====
+        const materials = {
+            body: new THREE.MeshPhysicalMaterial({
+                color: 0x1a1a3a,
+                metalness: 0.8,
+                roughness: 0.2,
+                emissive: 0x002244,
+                emissiveIntensity: 0.2,
+                clearcoat: 0.3,
+                clearcoatRoughness: 0.4
+            }),
+            bodyDark: new THREE.MeshPhysicalMaterial({
+                color: 0x0a0a2a,
+                metalness: 0.9,
+                roughness: 0.1,
+                emissive: 0x001133,
+                emissiveIntensity: 0.1
+            }),
+            accent: new THREE.MeshPhysicalMaterial({
+                color: 0x00f0ff,
+                metalness: 0.7,
+                roughness: 0.2,
+                emissive: 0x00f0ff,
+                emissiveIntensity: 0.3,
+                transparent: true,
+                opacity: 0.9
+            }),
+            glow: new THREE.MeshPhysicalMaterial({
+                color: 0x00f0ff,
+                emissive: 0x00f0ff,
+                emissiveIntensity: 0.8,
+                transparent: true,
+                opacity: 0.9
+            }),
+            joint: new THREE.MeshPhysicalMaterial({
+                color: 0x444466,
+                metalness: 0.6,
+                roughness: 0.4,
+                emissive: 0x112233,
+                emissiveIntensity: 0.1
+            }),
+            eye: new THREE.MeshPhysicalMaterial({
+                color: 0x00f0ff,
+                emissive: 0x00f0ff,
+                emissiveIntensity: 1.0,
+                transparent: true,
+                opacity: 0.95
+            }),
+            chest: new THREE.MeshPhysicalMaterial({
+                color: 0x00f0ff,
+                emissive: 0x00f0ff,
+                emissiveIntensity: 0.2,
+                transparent: true,
+                opacity: 0.4,
+                metalness: 0.9,
+                roughness: 0.1
+            })
+        };
+
+        // ===== BODY =====
+        const bodyGeo = new THREE.BoxGeometry(1.4, 1.8, 0.9);
+        const body = new THREE.Mesh(bodyGeo, materials.body);
+        body.position.y = 1.0;
+        body.castShadow = true;
+        body.receiveShadow = true;
+        group.add(body);
+        parts.body = body;
+
+        // Body details - chest plate
+        const chestGeo = new THREE.BoxGeometry(0.8, 0.5, 0.08);
+        const chest = new THREE.Mesh(chestGeo, materials.chest);
+        chest.position.set(0, 1.1, 0.47);
+        group.add(chest);
+        parts.chest = chest;
+
+        // Body accent lines
+        for (let i = 0; i < 3; i++) {
+            const lineGeo = new THREE.BoxGeometry(0.02, 0.3, 0.02);
+            const line = new THREE.Mesh(lineGeo, materials.accent);
+            line.position.set(-0.3 + i * 0.3, 0.8, 0.46);
+            group.add(line);
+        }
+
+        // ===== HEAD =====
+        const headGeo = new THREE.SphereGeometry(0.55, 32, 32);
+        const head = new THREE.Mesh(headGeo, materials.bodyDark);
+        head.position.y = 2.0;
+        head.castShadow = true;
+        head.receiveShadow = true;
+        group.add(head);
+        parts.head = head;
+
+        // Head visor
+        const visorGeo = new THREE.BoxGeometry(0.5, 0.2, 0.1);
+        const visor = new THREE.Mesh(visorGeo, materials.accent);
+        visor.position.set(0, 1.95, 0.5);
+        group.add(visor);
+        parts.visor = visor;
+
+        // ===== EYES =====
+        const eyeGeo = new THREE.SphereGeometry(0.08, 16, 16);
+        
+        const eyeL = new THREE.Mesh(eyeGeo, materials.eye);
+        eyeL.position.set(-0.15, 2.05, 0.5);
+        group.add(eyeL);
+        parts.eyeL = eyeL;
+
+        const eyeR = new THREE.Mesh(eyeGeo, materials.eye);
+        eyeR.position.set(0.15, 2.05, 0.5);
+        group.add(eyeR);
+        parts.eyeR = eyeR;
+
+        // Eye glow rings
+        const ringGeo = new THREE.RingGeometry(0.1, 0.13, 16);
+        const ringMat = new THREE.MeshBasicMaterial({
+            color: 0x00f0ff,
+            transparent: true,
+            opacity: 0.3,
+            side: THREE.DoubleSide
+        });
+        
+        const ringL = new THREE.Mesh(ringGeo, ringMat);
+        ringL.position.set(-0.15, 2.05, 0.52);
+        group.add(ringL);
+        
+        const ringR = new THREE.Mesh(ringGeo, ringMat);
+        ringR.position.set(0.15, 2.05, 0.52);
+        group.add(ringR);
+
+        // ===== ANTENNA =====
+        const antennaMat = new THREE.MeshPhysicalMaterial({
+            color: 0x00f0ff,
+            emissive: 0x00f0ff,
+            emissiveIntensity: 0.4,
+            metalness: 0.8,
+            roughness: 0.2
+        });
+        
+        const antennaGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.4);
+        const antenna = new THREE.Mesh(antennaGeo, antennaMat);
+        antenna.position.set(0, 2.3, 0);
+        group.add(antenna);
+        parts.antenna = antenna;
+
+        const tipGeo = new THREE.SphereGeometry(0.06, 8, 8);
+        const tip = new THREE.Mesh(tipGeo, antennaMat);
+        tip.position.set(0, 2.5, 0);
+        group.add(tip);
+        parts.tip = tip;
+
+        // ===== ARMS =====
+        const armMat = new THREE.MeshPhysicalMaterial({
+            color: 0x222244,
+            metalness: 0.7,
+            roughness: 0.3,
+            emissive: 0x001133,
+            emissiveIntensity: 0.1
+        });
+        const armGeo = new THREE.BoxGeometry(0.25, 0.9, 0.25);
+        
+        const armL = new THREE.Mesh(armGeo, armMat);
+        armL.position.set(-0.85, 1.3, 0);
+        armL.castShadow = true;
+        group.add(armL);
+        parts.armL = armL;
+
+        const armR = new THREE.Mesh(armGeo, armMat);
+        armR.position.set(0.85, 1.3, 0);
+        armR.castShadow = true;
+        group.add(armR);
+        parts.armR = armR;
+
+        // Shoulder joints
+        const jointGeo = new THREE.SphereGeometry(0.12, 12, 12);
+        const jointMat = new THREE.MeshPhysicalMaterial({
+            color: 0x00f0ff,
+            metalness: 0.8,
+            roughness: 0.2,
+            emissive: 0x00f0ff,
+            emissiveIntensity: 0.2
+        });
+        
+        const jointL = new THREE.Mesh(jointGeo, jointMat);
+        jointL.position.set(-0.85, 1.7, 0);
+        group.add(jointL);
+        
+        const jointR = new THREE.Mesh(jointGeo, jointMat);
+        jointR.position.set(0.85, 1.7, 0);
+        group.add(jointR);
+
+        // ===== HANDS =====
+        const handMat = new THREE.MeshPhysicalMaterial({
+            color: 0x00f0ff,
+            emissive: 0x00f0ff,
+            emissiveIntensity: 0.3,
+            metalness: 0.9,
+            roughness: 0.1
+        });
+        const handGeo = new THREE.SphereGeometry(0.1, 8, 8);
+        
+        const handL = new THREE.Mesh(handGeo, handMat);
+        handL.position.set(-0.85, 0.85, 0);
+        group.add(handL);
+        parts.handL = handL;
+
+        const handR = new THREE.Mesh(handGeo, handMat);
+        handR.position.set(0.85, 0.85, 0);
+        group.add(handR);
+        parts.handR = handR;
+
+        // ===== LEGS =====
+        const legMat = new THREE.MeshPhysicalMaterial({
+            color: 0x1a1a3a,
+            metalness: 0.6,
+            roughness: 0.4,
+            emissive: 0x001122,
+            emissiveIntensity: 0.1
+        });
+        const legGeo = new THREE.BoxGeometry(0.35, 0.7, 0.35);
+        
+        const legL = new THREE.Mesh(legGeo, legMat);
+        legL.position.set(-0.35, 0.35, 0);
+        legL.castShadow = true;
+        legL.receiveShadow = true;
+        group.add(legL);
+        parts.legL = legL;
+
+        const legR = new THREE.Mesh(legGeo, legMat);
+        legR.position.set(0.35, 0.35, 0);
+        legR.castShadow = true;
+        legR.receiveShadow = true;
+        group.add(legR);
+        parts.legR = legR;
+
+        // ===== FEET =====
+        const footMat = new THREE.MeshPhysicalMaterial({
+            color: 0x444466,
+            metalness: 0.5,
+            roughness: 0.5,
+            emissive: 0x001122,
+            emissiveIntensity: 0.05
+        });
+        const footGeo = new THREE.BoxGeometry(0.4, 0.12, 0.5);
+        
+        const footL = new THREE.Mesh(footGeo, footMat);
+        footL.position.set(-0.35, 0, 0.05);
+        footL.castShadow = true;
+        footL.receiveShadow = true;
+        group.add(footL);
+        parts.footL = footL;
+
+        const footR = new THREE.Mesh(footGeo, footMat);
+        footR.position.set(0.35, 0, 0.05);
+        footR.castShadow = true;
+        footR.receiveShadow = true;
+        group.add(footR);
+        parts.footR = footR;
+
+        // ===== GLOW RING (floating) =====
+        const glowRingGeo = new THREE.TorusGeometry(0.8, 0.025, 16, 48);
+        const glowRingMat = new THREE.MeshPhysicalMaterial({
+            color: 0x00f0ff,
+            emissive: 0x00f0ff,
+            emissiveIntensity: 0.4,
+            transparent: true,
+            opacity: 0.7,
+            metalness: 0.9,
+            roughness: 0.1,
+            side: THREE.DoubleSide
+        });
+        const glowRing = new THREE.Mesh(glowRingGeo, glowRingMat);
+        glowRing.position.y = 1.0;
+        glowRing.rotation.x = Math.PI / 2;
+        group.add(glowRing);
+        parts.glowRing = glowRing;
+
+        // Second ring (smaller, angled)
+        const glowRing2Geo = new THREE.TorusGeometry(0.6, 0.015, 16, 48);
+        const glowRing2Mat = new THREE.MeshPhysicalMaterial({
+            color: 0xff6bff,
+            emissive: 0xff6bff,
+            emissiveIntensity: 0.3,
+            transparent: true,
+            opacity: 0.5,
+            metalness: 0.9,
+            roughness: 0.1,
+            side: THREE.DoubleSide
+        });
+        const glowRing2 = new THREE.Mesh(glowRing2Geo, glowRing2Mat);
+        glowRing2.position.y = 1.2;
+        glowRing2.rotation.x = Math.PI / 3;
+        glowRing2.rotation.z = Math.PI / 6;
+        group.add(glowRing2);
+        parts.glowRing2 = glowRing2;
+
+        // ===== SPINE LIGHTS =====
+        for (let i = 0; i < 5; i++) {
+            const lightGeo = new THREE.SphereGeometry(0.03, 8, 8);
+            const lightMat = new THREE.MeshPhysicalMaterial({
+                color: 0x00f0ff,
+                emissive: 0x00f0ff,
+                emissiveIntensity: 0.5 + i * 0.1,
+                transparent: true,
+                opacity: 0.8
+            });
+            const light = new THREE.Mesh(lightGeo, lightMat);
+            light.position.set(0, 0.3 + i * 0.3, 0.47);
+            group.add(light);
+        }
+
+        // Store all parts for animation
+        this.robotParts = parts;
+
+        // Scale the entire robot
+        group.scale.set(0.8, 0.8, 0.8);
+        group.position.y = 0.1;
+
+        return group;
+    }
+
+    // ============================================================
+    // ROBOT ANIMATION
+    // ============================================================
+
+    animateRobot() {
+        if (!this.isRobotInitialized) return;
+
         const animate = () => {
+            if (!this.isRobotInitialized) return;
+            
             requestAnimationFrame(animate);
-            time += 0.01;
+            
+            this.animationTime += 0.01;
+            const time = this.animationTime;
 
             // Animate based on current state
-            this.animateRobot(time);
+            this.updateRobotAnimation(time);
 
             // Rotate particles
-            this.robotParticles.rotation.y += 0.0005;
+            if (this.robotParticles) {
+                this.robotParticles.rotation.y += 0.0005;
+                this.robotParticles.rotation.x = Math.sin(time * 0.1) * 0.02;
+            }
 
-            // Ring rotation
-            this.robotRing.rotation.z += 0.01;
-
-            renderer.render(scene, camera);
+            // Render
+            if (this.robotRenderer && this.robotScene && this.robotCamera) {
+                this.robotRenderer.render(this.robotScene, this.robotCamera);
+            }
         };
 
         animate();
-
-        // Handle resize
-        window.addEventListener('resize', () => {
-            const w = canvas.clientWidth;
-            const h = canvas.clientHeight;
-            renderer.setSize(w, h);
-            camera.aspect = w / h;
-            camera.updateProjectionMatrix();
-        });
-
-        // Blink eyes periodically
-        this.eyeBlinkInterval = setInterval(() => {
-            this.blinkEyes();
-        }, 3000);
-
-        // Store canvas for cleanup
-        this.robotCanvas = canvas;
     }
 
-    animateRobot(time) {
+    updateRobotAnimation(time) {
+        const parts = this.robotParts;
+        if (!parts) return;
+
         const group = this.robotGroup;
-        const arms = this.robotArms;
-        const legs = this.robotLegs;
-        const eyes = this.robotEyes;
+        if (!group) return;
+
+        // Default positions for reference
+        const defaultPos = {
+            armL: { x: -0.85, y: 1.3, z: 0 },
+            armR: { x: 0.85, y: 1.3, z: 0 },
+            legL: { x: -0.35, y: 0.35, z: 0 },
+            legR: { x: 0.35, y: 0.35, z: 0 },
+            head: { y: 2.0 },
+            body: { y: 1.0 }
+        };
 
         switch (this.robotAnim) {
             case 'idle':
-                // Gentle sway
-                group.rotation.z = Math.sin(time * 0.5) * 0.02;
-                group.position.y = Math.sin(time * 1.2) * 0.03;
-                arms.forEach((arm, i) => {
-                    arm.rotation.x = Math.sin(time * 0.8 + i * Math.PI) * 0.1;
-                });
-                eyes.forEach(eye => {
-                    eye.material.emissiveIntensity = 0.6 + Math.sin(time * 2) * 0.2;
-                });
+                // Gentle floating and swaying
+                group.position.y = 0.1 + Math.sin(time * 0.6) * 0.03;
+                group.rotation.z = Math.sin(time * 0.4) * 0.015;
+                group.rotation.x = Math.sin(time * 0.3) * 0.01;
+                
+                // Subtle arm sway
+                if (parts.armL) {
+                    parts.armL.rotation.x = Math.sin(time * 0.8) * 0.05;
+                    parts.armL.rotation.z = Math.sin(time * 0.5 + 1) * 0.03;
+                }
+                if (parts.armR) {
+                    parts.armR.rotation.x = Math.sin(time * 0.8 + Math.PI) * 0.05;
+                    parts.armR.rotation.z = Math.sin(time * 0.5) * 0.03;
+                }
+                
+                // Eye glow pulse
+                if (parts.eyeL && parts.eyeR) {
+                    const pulse = 0.7 + Math.sin(time * 2) * 0.3;
+                    parts.eyeL.material.emissiveIntensity = pulse;
+                    parts.eyeR.material.emissiveIntensity = pulse;
+                }
+                
+                // Ring rotation
+                if (parts.glowRing) {
+                    parts.glowRing.rotation.z += 0.01;
+                }
+                if (parts.glowRing2) {
+                    parts.glowRing2.rotation.y += 0.008;
+                    parts.glowRing2.rotation.x = Math.PI / 3 + Math.sin(time * 0.3) * 0.05;
+                }
                 break;
 
             case 'walk':
-                group.position.y = Math.abs(Math.sin(time * 3)) * 0.1 + 0.8;
-                legs.forEach((leg, i) => {
-                    leg.rotation.x = Math.sin(time * 3 + i * Math.PI) * 0.4;
-                });
-                arms.forEach((arm, i) => {
-                    arm.rotation.x = Math.sin(time * 3 + i * Math.PI + Math.PI) * 0.4;
-                });
-                group.rotation.y += 0.005;
+                // Walking motion
+                group.position.y = 0.1 + Math.abs(Math.sin(time * 3)) * 0.08;
+                
+                // Legs alternate
+                if (parts.legL) {
+                    parts.legL.rotation.x = Math.sin(time * 3) * 0.4;
+                    parts.legL.position.y = 0.35 + Math.abs(Math.sin(time * 3)) * 0.05;
+                }
+                if (parts.legR) {
+                    parts.legR.rotation.x = Math.sin(time * 3 + Math.PI) * 0.4;
+                    parts.legR.position.y = 0.35 + Math.abs(Math.sin(time * 3 + Math.PI)) * 0.05;
+                }
+                
+                // Arms swing opposite to legs
+                if (parts.armL) {
+                    parts.armL.rotation.x = Math.sin(time * 3 + Math.PI) * 0.4;
+                    parts.armL.rotation.z = Math.sin(time * 2) * 0.05;
+                }
+                if (parts.armR) {
+                    parts.armR.rotation.x = Math.sin(time * 3) * 0.4;
+                    parts.armR.rotation.z = Math.sin(time * 2 + Math.PI) * 0.05;
+                }
+                
+                // Body bob
+                if (parts.body) {
+                    parts.body.position.y = 1.0 + Math.abs(Math.sin(time * 3)) * 0.02;
+                }
+                
+                // Rings spin faster
+                if (parts.glowRing) {
+                    parts.glowRing.rotation.z += 0.03;
+                }
                 break;
 
             case 'talk':
-                group.position.y = 0.8 + Math.sin(time * 8) * 0.02;
-                arms.forEach((arm, i) => {
-                    arm.rotation.x = Math.sin(time * 4 + i * Math.PI) * 0.3;
-                    arm.rotation.z = Math.sin(time * 3 + i) * 0.1;
-                });
-                eyes.forEach(eye => {
-                    eye.material.emissiveIntensity = 0.5 + Math.sin(time * 6) * 0.5;
-                });
-                // Jaw movement (head bobbing)
-                group.children[1].position.y = 1.8 + Math.sin(time * 8) * 0.02;
+                // Head and body bob
+                if (parts.head) {
+                    parts.head.position.y = 2.0 + Math.sin(time * 6) * 0.02;
+                    parts.head.rotation.x = Math.sin(time * 5) * 0.02;
+                }
+                if (parts.body) {
+                    parts.body.position.y = 1.0 + Math.sin(time * 6) * 0.015;
+                }
+                
+                // Arms gesture
+                if (parts.armL) {
+                    parts.armL.rotation.x = -0.2 + Math.sin(time * 4) * 0.2;
+                    parts.armL.rotation.z = Math.sin(time * 3) * 0.08;
+                }
+                if (parts.armR) {
+                    parts.armR.rotation.x = -0.2 + Math.sin(time * 4 + Math.PI) * 0.2;
+                    parts.armR.rotation.z = Math.sin(time * 3 + 1) * 0.08;
+                }
+                
+                // Eyes glow with speech
+                if (parts.eyeL && parts.eyeR) {
+                    const pulse = 0.6 + Math.sin(time * 6) * 0.4;
+                    parts.eyeL.material.emissiveIntensity = pulse;
+                    parts.eyeR.material.emissiveIntensity = pulse;
+                }
+                
+                // Visor pulse
+                if (parts.visor) {
+                    parts.visor.material.opacity = 0.6 + Math.sin(time * 5) * 0.3;
+                }
+                
+                // Rings pulse
+                if (parts.glowRing) {
+                    const scale = 1 + Math.sin(time * 4) * 0.03;
+                    parts.glowRing.scale.x = scale;
+                    parts.glowRing.scale.y = scale;
+                    parts.glowRing.material.opacity = 0.5 + Math.sin(time * 4) * 0.2;
+                }
                 break;
 
             case 'think':
-                group.rotation.z = Math.sin(time * 0.3) * 0.05;
-                group.rotation.x = Math.sin(time * 0.2) * 0.03;
-                arms.forEach((arm, i) => {
-                    arm.rotation.x = -0.3 + Math.sin(time * 0.5 + i) * 0.1;
-                    arm.rotation.z = 0.2 + Math.sin(time * 0.3 + i) * 0.1;
-                });
-                eyes.forEach(eye => {
-                    eye.material.emissiveIntensity = 0.3 + Math.sin(time * 0.5) * 0.2;
-                });
-                // Ring pulse
-                this.robotRing.scale.x = 1 + Math.sin(time * 0.5) * 0.1;
-                this.robotRing.scale.y = 1 + Math.sin(time * 0.5) * 0.1;
+                // Tilt head
+                if (parts.head) {
+                    parts.head.rotation.z = Math.sin(time * 0.3) * 0.05;
+                    parts.head.rotation.x = Math.sin(time * 0.2) * 0.03;
+                }
+                
+                // Arms crossed/in thinking pose
+                if (parts.armL) {
+                    parts.armL.rotation.x = -0.5 + Math.sin(time * 0.5) * 0.05;
+                    parts.armL.rotation.z = 0.3 + Math.sin(time * 0.3) * 0.05;
+                }
+                if (parts.armR) {
+                    parts.armR.rotation.x = -0.5 + Math.sin(time * 0.5 + 1) * 0.05;
+                    parts.armR.rotation.z = -0.3 + Math.sin(time * 0.3 + 1) * 0.05;
+                }
+                
+                // Eyes slowly pulse
+                if (parts.eyeL && parts.eyeR) {
+                    const pulse = 0.4 + Math.sin(time * 0.5) * 0.2;
+                    parts.eyeL.material.emissiveIntensity = pulse;
+                    parts.eyeR.material.emissiveIntensity = pulse;
+                }
+                
+                // Rings pulse slowly
+                if (parts.glowRing) {
+                    const scale = 1 + Math.sin(time * 0.5) * 0.05;
+                    parts.glowRing.scale.x = scale;
+                    parts.glowRing.scale.y = scale;
+                    parts.glowRing.scale.z = scale;
+                }
+                if (parts.glowRing2) {
+                    const scale = 1 + Math.sin(time * 0.4 + 1) * 0.05;
+                    parts.glowRing2.scale.x = scale;
+                    parts.glowRing2.scale.y = scale;
+                    parts.glowRing2.scale.z = scale;
+                }
+                
+                // Slight body sway
+                if (parts.body) {
+                    parts.body.position.y = 1.0 + Math.sin(time * 0.2) * 0.02;
+                }
+                break;
+
+            case 'listening':
+                // Head tilt (curious)
+                if (parts.head) {
+                    parts.head.rotation.z = Math.sin(time * 0.5) * 0.03;
+                    parts.head.rotation.x = Math.sin(time * 0.3) * 0.02;
+                    parts.head.position.y = 2.0 + Math.sin(time * 0.4) * 0.015;
+                }
+                
+                // Arms open/listening pose
+                if (parts.armL) {
+                    parts.armL.rotation.x = -0.2 + Math.sin(time * 0.5) * 0.1;
+                    parts.armL.rotation.z = -0.2 + Math.sin(time * 0.4) * 0.05;
+                }
+                if (parts.armR) {
+                    parts.armR.rotation.x = -0.2 + Math.sin(time * 0.5 + 1) * 0.1;
+                    parts.armR.rotation.z = 0.2 + Math.sin(time * 0.4 + 1) * 0.05;
+                }
+                
+                // Eyes bright and pulsing
+                if (parts.eyeL && parts.eyeR) {
+                    const pulse = 0.8 + Math.sin(time * 1.5) * 0.2;
+                    parts.eyeL.material.emissiveIntensity = pulse;
+                    parts.eyeR.material.emissiveIntensity = pulse;
+                }
+                
+                // Rings rotate
+                if (parts.glowRing) {
+                    parts.glowRing.rotation.z += 0.02;
+                }
+                if (parts.glowRing2) {
+                    parts.glowRing2.rotation.y += 0.015;
+                }
                 break;
 
             default:
@@ -600,31 +1062,122 @@ class JarvisApp {
 
     setRobotAnim(anim) {
         this.robotAnim = anim;
-        this.elements.robotStatus.textContent = anim.charAt(0).toUpperCase() + anim.slice(1);
+        
+        // Update status text
+        const statusMap = {
+            'idle': 'Idle',
+            'walk': 'Walking',
+            'talk': 'Talking',
+            'think': 'Thinking',
+            'listening': 'Listening...'
+        };
+        
+        if (this.elements.robotStatus) {
+            this.elements.robotStatus.textContent = statusMap[anim] || anim;
+        }
 
         // Update button states
         this.elements.robotAnims.forEach(btn => {
             btn.classList.toggle('active', btn.dataset.anim === anim);
         });
 
-        // Reset ring scale when switching to non-think
-        if (anim !== 'think') {
-            this.robotRing.scale.x = 1;
-            this.robotRing.scale.y = 1;
+        // Trigger eye animation for specific states
+        if (anim === 'think') {
+            // Thinking eyes - slow blink
+            setTimeout(() => this.blinkEyes(), 500);
         }
     }
 
     blinkEyes() {
-        const eyes = this.robotEyes;
-        eyes.forEach(eye => {
-            eye.scale.y = 0.1;
-            setTimeout(() => {
-                eye.scale.y = 1;
-            }, 150);
-        });
+        const parts = this.robotParts;
+        if (!parts || !parts.eyeL || !parts.eyeR) return;
+
+        // Store original scales
+        const origScaleL = parts.eyeL.scale.y;
+        const origScaleR = parts.eyeR.scale.y;
+
+        // Close eyes
+        parts.eyeL.scale.y = 0.1;
+        parts.eyeR.scale.y = 0.1;
+        
+        // Open after 150ms
+        setTimeout(() => {
+            parts.eyeL.scale.y = origScaleL || 1;
+            parts.eyeR.scale.y = origScaleR || 1;
+        }, 150);
     }
 
-    // -------- Particles (Canvas) --------
+    resizeRobot() {
+        if (!this.isRobotInitialized || !this.robotCanvas) return;
+
+        const canvas = this.robotCanvas;
+        const parent = canvas.parentElement;
+        const rect = parent ? parent.getBoundingClientRect() : { width: canvas.clientWidth, height: canvas.clientHeight };
+        
+        const width = rect.width || canvas.clientWidth || 400;
+        const height = rect.height || canvas.clientHeight || 400;
+
+        if (this.robotRenderer) {
+            this.robotRenderer.setSize(width, height);
+            this.robotRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        }
+
+        if (this.robotCamera) {
+            this.robotCamera.aspect = width / height;
+            this.robotCamera.updateProjectionMatrix();
+        }
+    }
+
+    // ============================================================
+    // LAMP ANIMATION
+    // ============================================================
+
+    initLampAnimation() {
+        this.lampInterval = null;
+    }
+
+    startLampAnimation() {
+        this.stopLampAnimation();
+        
+        const bulb = this.elements.lampBulb;
+        const glow = this.elements.lampGlow;
+        if (!bulb) return;
+
+        let state = 'on';
+        
+        this.lampInterval = setInterval(() => {
+            if (state === 'on') {
+                bulb.classList.remove('off');
+                if (glow) glow.style.opacity = '1';
+                state = 'fade';
+            } else if (state === 'fade') {
+                if (glow) {
+                    const currentOpacity = parseFloat(glow.style.opacity) || 1;
+                    glow.style.opacity = Math.max(0.2, currentOpacity - 0.05);
+                    if (currentOpacity <= 0.3) {
+                        state = 'off';
+                    }
+                }
+            } else if (state === 'off') {
+                bulb.classList.add('off');
+                if (glow) glow.style.opacity = '0';
+                state = 'on';
+                setTimeout(() => {
+                    if (bulb) bulb.classList.remove('off');
+                    if (glow) glow.style.opacity = '1';
+                }, 2000);
+            }
+        }, 500);
+    }
+
+    stopLampAnimation() {
+        if (this.lampInterval) {
+            clearInterval(this.lampInterval);
+            this.lampInterval = null;
+        }
+    }
+
+    // -------- Particles (Background) --------
     initParticles() {
         const canvas = document.createElement('canvas');
         canvas.style.position = 'fixed';
@@ -725,7 +1278,6 @@ class JarvisApp {
 
     updateStats() {
         this.elements.voiceCommands.textContent = this.voiceCommands;
-        // Chat messages count is updated in addMessage
         this.elements.aiResponses.textContent = this.aiResponses;
 
         // Uptime
@@ -746,7 +1298,6 @@ class JarvisApp {
     }
 
     loadStats() {
-        // Load from localStorage
         this.voiceCommands = parseInt(localStorage.getItem('jarvis_voice_commands')) || 0;
         this.aiResponses = parseInt(localStorage.getItem('jarvis_ai_responses')) || 0;
         const messages = parseInt(localStorage.getItem('jarvis_chat_count')) || 0;
@@ -755,7 +1306,6 @@ class JarvisApp {
         }
         this.updateStats();
 
-        // Auto-save stats periodically
         setInterval(() => {
             localStorage.setItem('jarvis_voice_commands', this.voiceCommands);
             localStorage.setItem('jarvis_ai_responses', this.aiResponses);
@@ -765,7 +1315,6 @@ class JarvisApp {
     }
 
     loadChatHistory() {
-        // Placeholder - load from server
         this.chatHistory = [];
         this.elements.chatMessages.innerHTML = `
             <div class="message ai-message">
@@ -791,16 +1340,16 @@ class JarvisApp {
         this.currentTheme = theme;
         document.body.dataset.theme = theme;
 
-        // Update theme options
         this.elements.themeOptions.forEach(btn => {
             btn.classList.toggle('active', btn.dataset.theme === theme);
         });
 
-        // Update theme toggle icon
         const icon = this.elements.themeToggle.querySelector('i');
         if (theme === 'dark') {
             icon.className = 'fas fa-moon';
             document.documentElement.style.setProperty('--bg-dark', '#0a0a1a');
+            document.documentElement.style.setProperty('--text-primary', '#ffffff');
+            document.documentElement.style.setProperty('--text-secondary', '#8899bb');
         } else if (theme === 'light') {
             icon.className = 'fas fa-sun';
             document.documentElement.style.setProperty('--bg-dark', '#f0f0f5');
@@ -812,6 +1361,8 @@ class JarvisApp {
             document.documentElement.style.setProperty('--primary', '#ff00ff');
             document.documentElement.style.setProperty('--primary-dark', '#cc00cc');
             document.documentElement.style.setProperty('--secondary', '#00ffff');
+            document.documentElement.style.setProperty('--text-primary', '#ffffff');
+            document.documentElement.style.setProperty('--text-secondary', '#aa88bb');
         }
 
         localStorage.setItem('jarvis_theme', theme);
@@ -898,12 +1449,16 @@ class JarvisApp {
         if (this.eyeBlinkInterval) {
             clearInterval(this.eyeBlinkInterval);
         }
+        if (this.lampInterval) {
+            clearInterval(this.lampInterval);
+        }
         if (this.recognition) {
             try { this.recognition.stop(); } catch (e) {}
         }
         if (this.synth) {
             this.synth.cancel();
         }
+        this.isRobotInitialized = false;
     }
 }
 
@@ -923,3 +1478,10 @@ style.textContent = `
     }
 `;
 document.head.appendChild(style);
+
+// Handle page unload
+window.addEventListener('beforeunload', () => {
+    if (window.jarvis) {
+        window.jarvis.destroy();
+    }
+});
