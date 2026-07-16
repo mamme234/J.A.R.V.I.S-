@@ -1,6 +1,5 @@
 // ============================================================
-// JARVIS PRO - Complete Frontend Controller
-// WITH RENDER BACKEND SUPPORT
+// JARVIS PRO - Frontend with Render Compatibility
 // ============================================================
 
 class JarvisApp {
@@ -25,12 +24,13 @@ class JarvisApp {
         this.aiName = localStorage.getItem('jarvis_ai_name') || 'Jarvis';
         
         // === BACKEND CONFIGURATION ===
-        // Your Render backend URL
-        this.apiBase = 'https://j-a-r-v-i-s-66ks.onrender.com';
+        // Auto-detect backend URL (works on Render and localhost)
+        this.apiBase = window.location.origin;
         this.isBackendOnline = false;
         this.retryCount = 0;
         this.maxRetries = 3;
         this.backendCheckInterval = null;
+        this.offlineMode = false;
 
         this.init();
     }
@@ -47,10 +47,8 @@ class JarvisApp {
         this.initLampAnimation();
         this.applyPersonalization();
         
-        // Check backend health on startup
         this.checkBackendHealth();
         
-        // Re-check every 30 seconds
         this.backendCheckInterval = setInterval(() => {
             this.checkBackendHealth();
         }, 30000);
@@ -60,7 +58,7 @@ class JarvisApp {
     async checkBackendHealth() {
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
             
             const response = await fetch(`${this.apiBase}/api/health`, {
                 method: 'GET',
@@ -74,34 +72,32 @@ class JarvisApp {
             clearTimeout(timeoutId);
 
             if (response.ok) {
-                const data = await response.json();
                 this.isBackendOnline = true;
+                this.offlineMode = false;
                 this.retryCount = 0;
                 console.log('✅ Backend is online:', this.apiBase);
-                console.log('📊 Backend status:', data);
                 this.updateBackendStatus(true);
                 
-                // Remove offline banner if exists
                 const banner = document.getElementById('offlineModeBanner');
                 if (banner) banner.remove();
                 
                 return true;
             } else {
-                throw new Error(`Status: ${response.status} - ${response.statusText}`);
+                throw new Error(`Status: ${response.status}`);
             }
         } catch (error) {
             this.isBackendOnline = false;
+            this.offlineMode = true;
             console.warn('⚠️ Backend unavailable:', error.message);
             this.updateBackendStatus(false);
             
-            // Retry with exponential backoff
             if (this.retryCount < this.maxRetries) {
                 this.retryCount++;
                 const delay = Math.pow(2, this.retryCount) * 3000;
                 console.log(`🔄 Retrying in ${delay/1000}s (attempt ${this.retryCount}/${this.maxRetries})`);
                 setTimeout(() => this.checkBackendHealth(), delay);
             } else {
-                console.warn('❌ Backend unreachable after max retries.');
+                console.warn('❌ Backend unreachable. Running in offline mode.');
                 this.showOfflineMode();
             }
             return false;
@@ -118,25 +114,24 @@ class JarvisApp {
             statusDot.className = `status-dot ${isOnline ? 'online' : 'offline'}`;
         }
         if (statusText) {
-            statusText.textContent = isOnline ? 'AI Online' : 'AI Offline';
-            statusText.style.color = isOnline ? 'var(--text-secondary)' : '#ff4444';
+            statusText.textContent = isOnline ? 'AI Online' : 'Offline Mode';
+            statusText.style.color = isOnline ? 'var(--text-secondary)' : '#ffaa00';
         }
         if (systemStatus) {
-            systemStatus.textContent = isOnline ? 'Operational' : 'Offline';
+            systemStatus.textContent = isOnline ? 'Operational' : 'Offline (Demo)';
             systemStatus.className = isOnline ? 'status-online' : 'status-offline';
+            systemStatus.style.color = isOnline ? '#00ff88' : '#ffaa00';
         }
         if (aiCoreStatus) {
-            aiCoreStatus.textContent = isOnline ? 'Active' : 'Inactive';
-            aiCoreStatus.style.color = isOnline ? '#00ff88' : '#ff4444';
+            aiCoreStatus.textContent = isOnline ? 'Active' : 'Demo Mode';
+            aiCoreStatus.style.color = isOnline ? '#00ff88' : '#ffaa00';
         }
     }
 
     showOfflineMode() {
-        // Remove existing banner
         const existingBanner = document.getElementById('offlineModeBanner');
         if (existingBanner) existingBanner.remove();
 
-        // Show persistent notification
         const notification = document.createElement('div');
         notification.id = 'offlineModeBanner';
         notification.style.cssText = `
@@ -145,7 +140,7 @@ class JarvisApp {
             left: 0;
             right: 0;
             padding: 14px 20px;
-            background: linear-gradient(135deg, #ff4444, #cc0000);
+            background: linear-gradient(135deg, #ff8800, #cc6600);
             color: white;
             text-align: center;
             font-size: 14px;
@@ -159,7 +154,7 @@ class JarvisApp {
             flex-wrap: wrap;
         `;
         notification.innerHTML = `
-            <span>⚠️ Backend is unavailable (503). Running in offline/demo mode.</span>
+            <span>📡 Offline Mode - Running in demo mode</span>
             <button onclick="this.parentElement.remove()" style="
                 background: rgba(255,255,255,0.2);
                 color: white;
@@ -172,7 +167,7 @@ class JarvisApp {
             ">Dismiss</button>
             <button onclick="window.jarvis.checkBackendHealth()" style="
                 background: white;
-                color: #cc0000;
+                color: #cc6600;
                 border: none;
                 padding: 6px 18px;
                 border-radius: 8px;
@@ -182,14 +177,6 @@ class JarvisApp {
             ">🔄 Retry</button>
         `;
         document.body.prepend(notification);
-
-        // Only add message if not already shown
-        if (!this._offlineMessageShown) {
-            this._offlineMessageShown = true;
-            setTimeout(() => {
-                this.addMessage('ai', '⚠️ I\'m running in offline mode. The backend server is unavailable (503 error). Please check your connection or try again later. You can still use the interface in demo mode.');
-            }, 1000);
-        }
     }
 
     // -------- DOM Caching --------
@@ -256,44 +243,34 @@ class JarvisApp {
 
     // -------- Event Binding --------
     bindEvents() {
-        // Login
         this.elements.loginForm.addEventListener('submit', (e) => this.handleLogin(e));
         this.elements.logoutBtn.addEventListener('click', () => this.handleLogout());
 
-        // Navigation
         this.elements.navItems.forEach(item => {
             item.addEventListener('click', () => this.navigateTo(item.dataset.section));
         });
 
-        // Chat
         this.elements.sendBtn.addEventListener('click', () => this.sendMessage());
         this.elements.chatInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.sendMessage();
         });
 
-        // Voice
         this.elements.voiceBtn.addEventListener('click', () => this.toggleVoice());
-
-        // TTS
         this.elements.ttsBtn.addEventListener('click', () => this.speakLastResponse());
 
-        // Theme
         this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
         this.elements.themeOptions.forEach(btn => {
             btn.addEventListener('click', () => this.setTheme(btn.dataset.theme));
         });
 
-        // Robot Animations
         this.elements.robotAnims.forEach(btn => {
             btn.addEventListener('click', () => this.setRobotAnim(btn.dataset.anim));
         });
 
-        // Settings
         this.elements.saveKeys.addEventListener('click', () => this.saveAPIKeys());
         this.elements.clearHistory.addEventListener('click', () => this.clearChatHistory());
         this.elements.exportData.addEventListener('click', () => this.exportUserData());
         
-        // Personalization
         this.elements.saveNameBtn.addEventListener('click', () => this.saveUserName());
         this.elements.saveAINameBtn.addEventListener('click', () => this.saveAIName());
         this.elements.userNameInput.addEventListener('keypress', (e) => {
@@ -303,18 +280,15 @@ class JarvisApp {
             if (e.key === 'Enter') this.saveAIName();
         });
 
-        // Auto-speak
         this.elements.autoSpeak.addEventListener('change', (e) => {
             localStorage.setItem('autoSpeak', e.target.checked);
         });
 
-        // Register link
         document.getElementById('showRegister')?.addEventListener('click', (e) => {
             e.preventDefault();
             this.showRegisterForm();
         });
 
-        // Window resize for robot
         window.addEventListener('resize', () => this.resizeRobot());
     }
 
@@ -326,14 +300,50 @@ class JarvisApp {
 
         if (!username || !password) {
             this.elements.loginError.textContent = 'Please enter username and password';
+            this.elements.loginError.style.color = '#ff4444';
             return;
         }
 
-        // Check if backend is online
+        this.userName = username;
+        localStorage.setItem('jarvis_user_name', username);
+
+        // Offline mode auto-login
+        if (this.offlineMode) {
+            this.isLoggedIn = true;
+            this.elements.loginScreen.style.display = 'none';
+            this.elements.mainDashboard.style.display = 'block';
+            this.elements.profileUsername.textContent = username;
+            this.elements.profileEmail.textContent = 'offline@demo.com';
+            this.elements.profileJoined.textContent = 'Today';
+            this.applyPersonalization();
+            this.loadChatHistory();
+            this.updateStats();
+            this.startLampAnimation();
+            
+            this.addMessage('ai', '👋 Welcome to OFFLINE MODE! The backend is unavailable, but you can still use the interface.');
+            return;
+        }
+
         if (!this.isBackendOnline) {
             await this.checkBackendHealth();
             if (!this.isBackendOnline) {
-                this.elements.loginError.textContent = '⚠️ Server offline. Please try again later.';
+                this.offlineMode = true;
+                this.elements.loginError.textContent = '⚠️ Server offline. Running in demo mode...';
+                this.elements.loginError.style.color = '#ffaa00';
+                
+                setTimeout(() => {
+                    this.isLoggedIn = true;
+                    this.elements.loginScreen.style.display = 'none';
+                    this.elements.mainDashboard.style.display = 'block';
+                    this.elements.profileUsername.textContent = username;
+                    this.elements.profileEmail.textContent = 'offline@demo.com';
+                    this.elements.profileJoined.textContent = 'Today';
+                    this.applyPersonalization();
+                    this.loadChatHistory();
+                    this.updateStats();
+                    this.startLampAnimation();
+                    this.addMessage('ai', '📡 Running in OFFLINE DEMO mode. The server is currently unavailable.');
+                }, 1500);
                 return;
             }
         }
@@ -354,29 +364,38 @@ class JarvisApp {
 
             if (data.success) {
                 this.isLoggedIn = true;
-                this.userName = username;
-                localStorage.setItem('jarvis_user_name', username);
-                
                 this.elements.loginScreen.style.display = 'none';
                 this.elements.mainDashboard.style.display = 'block';
+                this.elements.profileUsername.textContent = username;
+                this.elements.profileEmail.textContent = data.email || 'user@email.com';
+                this.elements.profileJoined.textContent = data.joined || 'Today';
                 
                 this.applyPersonalization();
                 this.loadChatHistory();
                 this.updateStats();
                 this.startLampAnimation();
                 
-                // Store token
                 if (data.token) {
                     localStorage.setItem('jarvis_token', data.token);
                 }
             } else {
                 this.elements.loginError.textContent = data.message || 'Login failed';
+                this.elements.loginError.style.color = '#ff4444';
             }
         } catch (error) {
             console.error('Login error:', error);
-            this.elements.loginError.textContent = error.name === 'AbortError' 
-                ? 'Request timeout. Server may be down.' 
-                : 'Connection error. Please try again.';
+            this.offlineMode = true;
+            this.isLoggedIn = true;
+            this.elements.loginScreen.style.display = 'none';
+            this.elements.mainDashboard.style.display = 'block';
+            this.elements.profileUsername.textContent = username;
+            this.elements.profileEmail.textContent = 'offline@demo.com';
+            this.elements.profileJoined.textContent = 'Today';
+            this.applyPersonalization();
+            this.loadChatHistory();
+            this.updateStats();
+            this.startLampAnimation();
+            this.addMessage('ai', '📡 Running in OFFLINE DEMO mode. The server is currently unavailable.');
         }
     }
 
@@ -386,12 +405,13 @@ class JarvisApp {
         this.elements.loginScreen.style.display = 'flex';
         this.elements.loginForm.reset();
         this.elements.loginError.textContent = '';
+        this.elements.loginError.style.color = '#ff4444';
         localStorage.removeItem('jarvis_token');
         this.stopLampAnimation();
     }
 
     showRegisterForm() {
-        this.elements.loginError.textContent = 'Registration: Create account with username and password';
+        this.elements.loginError.textContent = '📝 Create account: Use any username and password (6+ chars)';
         this.elements.loginError.style.color = '#00ff88';
         setTimeout(() => {
             this.elements.loginError.style.color = '#ff4444';
@@ -418,7 +438,6 @@ class JarvisApp {
         const name = this.userName || 'User';
         const ai = this.aiName || 'Jarvis';
         
-        // Update all name instances
         if (this.elements.welcomeName) this.elements.welcomeName.textContent = name;
         if (this.elements.welcomeMessage) {
             this.elements.welcomeMessage.textContent = `How can I assist you today, ${name}?`;
@@ -437,7 +456,6 @@ class JarvisApp {
         if (this.elements.aiNameInput) this.elements.aiNameInput.value = ai;
         if (this.elements.profileUsername) this.elements.profileUsername.textContent = name;
         
-        // Update chat placeholder
         if (this.elements.chatInput) {
             this.elements.chatInput.placeholder = `Type a message to ${ai}...`;
         }
@@ -449,9 +467,9 @@ class JarvisApp {
             this.userName = name;
             localStorage.setItem('jarvis_user_name', name);
             this.applyPersonalization();
-            this.showNotification('Name saved successfully!');
+            this.showNotification('✅ Name saved successfully!');
         } else {
-            this.showNotification('Please enter a valid name');
+            this.showNotification('⚠️ Please enter a valid name');
         }
     }
 
@@ -461,9 +479,9 @@ class JarvisApp {
             this.aiName = name;
             localStorage.setItem('jarvis_ai_name', name);
             this.applyPersonalization();
-            this.showNotification('AI name saved successfully!');
+            this.showNotification('✅ AI name saved successfully!');
         } else {
-            this.showNotification('Please enter a valid name');
+            this.showNotification('⚠️ Please enter a valid name');
         }
     }
 
@@ -482,12 +500,17 @@ class JarvisApp {
         this.setRobotAnim('think');
 
         try {
-            // Check backend
+            if (this.offlineMode || !this.isBackendOnline) {
+                await this.simulateOfflineResponse(text);
+                input.disabled = false;
+                input.focus();
+                return;
+            }
+
             if (!this.isBackendOnline) {
                 await this.checkBackendHealth();
                 if (!this.isBackendOnline) {
-                    this.addMessage('ai', '⚠️ Backend is offline. Please check your connection and try again.');
-                    this.setRobotAnim('idle');
+                    await this.simulateOfflineResponse(text);
                     input.disabled = false;
                     input.focus();
                     return;
@@ -516,10 +539,14 @@ class JarvisApp {
             
             clearTimeout(timeoutId);
 
-            if (response.status === 503) {
+            if (response.status === 503 || response.status === 502 || response.status === 504) {
                 this.isBackendOnline = false;
+                this.offlineMode = true;
                 this.updateBackendStatus(false);
-                throw new Error('Service unavailable (503)');
+                await this.simulateOfflineResponse(text);
+                input.disabled = false;
+                input.focus();
+                return;
             }
 
             const data = await response.json();
@@ -541,24 +568,54 @@ class JarvisApp {
                     }
                 }, 3000);
             } else {
-                this.addMessage('ai', '⚠️ Error: ' + (data.message || 'Unknown error'));
-                this.setRobotAnim('idle');
+                await this.simulateOfflineResponse(text);
             }
         } catch (error) {
             console.error('Chat error:', error);
-            this.setRobotAnim('idle');
-            
-            if (error.name === 'AbortError') {
-                this.addMessage('ai', '⚠️ Request timeout. The server may be experiencing issues.');
-            } else if (error.message.includes('503')) {
-                this.addMessage('ai', '⚠️ Service unavailable (503). The backend server is down. Please try again later.');
-            } else {
-                this.addMessage('ai', '⚠️ Connection error. Please check your network.');
-            }
+            await this.simulateOfflineResponse(text);
         }
 
         input.disabled = false;
         input.focus();
+    }
+
+    async simulateOfflineResponse(userMessage) {
+        this.setRobotAnim('think');
+        
+        await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 1200));
+        
+        const responses = [
+            `That's a great question, ${this.userName}! Here's what I think...`,
+            `Interesting! Let me process that for you, ${this.userName}.`,
+            `I understand. Based on what you said, here's my response.`,
+            `Great point! Let me share my thoughts on that.`,
+            `I'm glad you asked that, ${this.userName}. Here's what I know.`,
+            `Let me think about that... Ah yes, here's my answer.`,
+            `That's a fascinating topic! Let me explain.`,
+            `I appreciate you asking, ${this.userName}. Here's my take.`,
+            `Let me analyze that for you. One moment...`,
+            `Perfect question! Here's what I've got for you.`
+        ];
+        
+        const response = responses[Math.floor(Math.random() * responses.length)] + 
+            `\n\n💡 (Running in offline demo mode. Connect to backend for AI responses.)`;
+        
+        this.addMessage('ai', response);
+        this.chatHistory.push({ role: 'assistant', content: response });
+        this.aiResponses++;
+        this.updateStats();
+        
+        this.setRobotAnim('talk');
+        
+        if (this.elements.autoSpeak.checked) {
+            this.speakText(response);
+        }
+
+        setTimeout(() => {
+            if (this.robotAnim === 'talk') {
+                this.setRobotAnim('idle');
+            }
+        }, 3000);
     }
 
     addMessage(role, content) {
@@ -704,7 +761,7 @@ class JarvisApp {
         if (text) this.speakText(text);
     }
 
-    // -------- 3D Robot --------
+    // -------- 3D Robot (Procedural) --------
     initRobot3D() {
         const canvas = this.elements.robotCanvas;
         if (!canvas) return;
@@ -1422,7 +1479,7 @@ class JarvisApp {
             gemini: this.elements.geminiKey.value,
         };
         localStorage.setItem('jarvis_api_keys', JSON.stringify(keys));
-        this.showNotification('API keys saved successfully!');
+        this.showNotification('✅ API keys saved successfully!');
     }
 
     clearChatHistory() {
@@ -1441,7 +1498,7 @@ class JarvisApp {
             this.chatHistory = [];
             localStorage.setItem('jarvis_chat_count', '0');
             this.elements.chatMessagesCount.textContent = '0';
-            this.showNotification('Chat history cleared');
+            this.showNotification('🗑️ Chat history cleared');
         }
     }
 
@@ -1463,7 +1520,7 @@ class JarvisApp {
         a.download = `jarvis_data_${Date.now()}.json`;
         a.click();
         URL.revokeObjectURL(url);
-        this.showNotification('Data exported successfully!');
+        this.showNotification('📤 Data exported successfully!');
     }
 
     // -------- Notifications --------
