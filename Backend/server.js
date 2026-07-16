@@ -9,6 +9,8 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
+const fs = require('fs');
+const { exec } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -21,7 +23,6 @@ app.use(helmet({
     crossOriginEmbedderPolicy: false
 }));
 
-// CORS configuration
 app.use(cors({
     origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://*.onrender.com'],
     credentials: true,
@@ -29,21 +30,19 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Serve frontend static files
 app.use(express.static(path.join(__dirname, '../frontend')));
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    message: { success: false, message: 'Too many requests, please try again later.' }
-});
-app.use('/api/', limiter);
+// Create voice samples directory
+const voiceDir = path.join(__dirname, 'voice_samples');
+if (!fs.existsSync(voiceDir)) {
+    fs.mkdirSync(voiceDir, { recursive: true });
+}
 
-// ========== HEALTH CHECK (Required for Render) ==========
+// ========== HEALTH CHECK ==========
 app.get('/health', (req, res) => {
     res.status(200).json({
         status: 'ok',
@@ -66,7 +65,6 @@ app.get('/api/health', (req, res) => {
 // ========== DATABASE CONNECTION ==========
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// Try to connect to MongoDB, but continue if it fails
 if (MONGODB_URI) {
     mongoose.connect(MONGODB_URI, {
         useNewUrlParser: true,
@@ -87,6 +85,13 @@ const UserSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
+    voiceSample: { type: String, default: null }, // Store voice sample path
+    voiceSettings: {
+        speed: { type: Number, default: 1 },
+        pitch: { type: Number, default: 1 },
+        volume: { type: Number, default: 1 },
+        voiceType: { type: String, default: 'default' } // 'default', 'cloned', 'elevenlabs'
+    },
     chatHistory: [{
         role: { type: String, enum: ['user', 'assistant', 'system'] },
         content: String,
@@ -125,7 +130,7 @@ class AIProviders {
                 const response = await client.chat.completions.create({
                     model: 'gpt-3.5-turbo',
                     messages: [
-                        { role: 'system', content: 'You are Jarvis, a helpful AI assistant. Be concise, witty, and helpful.' },
+                        { role: 'system', content: 'You are Jarvis, a helpful AI assistant. Be concise, witty, and helpful. If someone asks about the developer, say: "Muhammad is the developer. You can reach him at muhammad@email.com or on GitHub as Muhammad-Dev."' },
                         ...history.slice(-10),
                         { role: 'user', content: message }
                     ],
@@ -158,7 +163,7 @@ class AIProviders {
                     body: JSON.stringify({
                         model: 'deepseek-chat',
                         messages: [
-                            { role: 'system', content: 'You are Jarvis, a helpful AI assistant.' },
+                            { role: 'system', content: 'You are Jarvis, a helpful AI assistant. If asked about developer, say: "Muhammad is the developer. Contact: muhammad@email.com"' },
                             ...history.slice(-10),
                             { role: 'user', content: message }
                         ],
@@ -190,16 +195,17 @@ class AIProviders {
             },
             mock: async () => {
                 const responses = [
-                    "I'm Jarvis, your AI assistant! How can I help you today?",
-                    "That's a great question! Let me think about that.",
-                    "I understand. Here's what I think about that...",
-                    "Interesting! I'd love to help you with that.",
-                    "Let me analyze that for you.",
-                    "I'm here to assist you with anything you need!",
-                    "That's a fascinating topic! Let me share my thoughts.",
-                    "I appreciate your question. Here's my response...",
-                    "Great question! Let me provide some insights.",
-                    "I'm always ready to help. Here's what I think."
+                    "I'm Jarvis, Muhammad's AI assistant! How can I help you today?",
+                    "That's a great question, Muhammad! Let me think about that.",
+                    "I understand, Muhammad. Here's what I think about that...",
+                    "Interesting, Muhammad! I'd love to help you with that.",
+                    "Let me analyze that for you, Muhammad.",
+                    "I'm here to assist you, Muhammad, with anything you need!",
+                    "That's a fascinating topic, Muhammad! Let me share my thoughts.",
+                    "I appreciate your question, Muhammad. Here's my response...",
+                    "Great question, Muhammad! Let me provide some insights.",
+                    "I'm always ready to help, Muhammad. Here's what I think.",
+                    "Assalamu Alaikum Muhammad! How can I assist you today?"
                 ];
                 return responses[Math.floor(Math.random() * responses.length)];
             }
@@ -224,6 +230,111 @@ class AIProviders {
             console.error(`AI Error (${model}):`, error.message);
             return await providers.mock();
         }
+    }
+}
+
+// ========== VOICE CLONING SYSTEM ==========
+
+class VoiceCloningService {
+    // Option 1: Use ElevenLabs API (Best Quality)
+    static async elevenLabsClone(text, voiceId = '21m00Tcm4TlvDq8ikWAM') {
+        try {
+            if (!process.env.ELEVENLABS_API_KEY) {
+                console.warn('⚠️ ElevenLabs API key not configured, using fallback');
+                return null;
+            }
+
+            const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'xi-api-key': process.env.ELEVENLABS_API_KEY
+                },
+                body: JSON.stringify({
+                    text: text,
+                    model_id: 'eleven_monolingual_v1',
+                    voice_settings: {
+                        stability: 0.5,
+                        similarity_boost: 0.75
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`ElevenLabs API error: ${response.status}`);
+            }
+
+            const audioBuffer = await response.arrayBuffer();
+            return Buffer.from(audioBuffer);
+        } catch (error) {
+            console.error('ElevenLabs error:', error);
+            return null;
+        }
+    }
+
+    // Option 2: Use Coqui TTS (Free, Open Source)
+    static async coquiClone(text, voiceReferencePath) {
+        try {
+            // This requires Coqui TTS installed
+            // pip install TTS
+            const { spawn } = require('child_process');
+            
+            const outputPath = path.join(__dirname, 'temp_audio.wav');
+            
+            return new Promise((resolve, reject) => {
+                const python = spawn('python3', [
+                    '-c',
+                    `
+import torch
+from TTS.api import TTS
+import os
+
+# Load model
+tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False)
+
+# Clone voice and generate speech
+tts.tts_to_file(
+    text="${text.replace(/"/g, '\\"')}",
+    speaker_wav="${voiceReferencePath}",
+    file_path="${outputPath}",
+    language="en"
+)
+print("DONE")
+                    `
+                ]);
+
+                let output = '';
+                python.stdout.on('data', (data) => {
+                    output += data.toString();
+                    if (output.includes('DONE')) {
+                        const audioBuffer = fs.readFileSync(outputPath);
+                        fs.unlinkSync(outputPath);
+                        resolve(audioBuffer);
+                    }
+                });
+
+                python.stderr.on('data', (data) => {
+                    console.error('Coqui error:', data.toString());
+                });
+
+                python.on('error', (err) => {
+                    reject(err);
+                });
+
+                setTimeout(() => {
+                    reject(new Error('Coqui TTS timeout'));
+                }, 30000);
+            });
+        } catch (error) {
+            console.error('Coqui error:', error);
+            return null;
+        }
+    }
+
+    // Option 3: Web Speech API (Browser-based, fallback)
+    static async webSpeech(text, settings = {}) {
+        // This runs in the browser
+        return null;
     }
 }
 
@@ -334,12 +445,119 @@ app.post('/api/login', async (req, res) => {
                 email: user.email,
                 joined: user.createdAt.toISOString().split('T')[0],
                 stats: user.stats,
-                settings: user.settings
+                settings: user.settings,
+                voiceSettings: user.voiceSettings || { speed: 1, pitch: 1, volume: 1, voiceType: 'default' }
             }
         });
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ success: false, message: 'Login failed' });
+    }
+});
+
+// Upload Voice Sample for Cloning
+app.post('/api/voice/upload', authenticateToken, async (req, res) => {
+    try {
+        const { audioData } = req.body;
+        
+        if (!audioData) {
+            return res.status(400).json({ success: false, message: 'No audio data provided' });
+        }
+
+        // Decode base64 audio
+        const audioBuffer = Buffer.from(audioData.split(',')[1] || audioData, 'base64');
+        
+        // Save voice sample
+        const filename = `voice_${req.user._id}_${Date.now()}.wav`;
+        const filepath = path.join(voiceDir, filename);
+        fs.writeFileSync(filepath, audioBuffer);
+
+        // Update user
+        req.user.voiceSample = filepath;
+        req.user.voiceSettings.voiceType = 'cloned';
+        await req.user.save();
+
+        res.json({ 
+            success: true, 
+            message: 'Voice sample uploaded successfully!',
+            filename: filename
+        });
+    } catch (error) {
+        console.error('Voice upload error:', error);
+        res.status(500).json({ success: false, message: 'Failed to upload voice sample' });
+    }
+});
+
+// Text-to-Speech with Voice Cloning
+app.post('/api/voice/speak', authenticateToken, async (req, res) => {
+    try {
+        const { text, voiceType = 'default' } = req.body;
+        
+        if (!text) {
+            return res.status(400).json({ success: false, message: 'Text is required' });
+        }
+
+        let audioBuffer = null;
+
+        // Try ElevenLabs if API key is available and voice type is 'cloned' or 'elevenlabs'
+        if (process.env.ELEVENLABS_API_KEY && (voiceType === 'cloned' || voiceType === 'elevenlabs')) {
+            // Use Muhammad's voice ID (you can get this from ElevenLabs)
+            const voiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+            audioBuffer = await VoiceCloningService.elevenLabsClone(text, voiceId);
+        }
+
+        // If ElevenLabs failed and we have a voice sample, try Coqui
+        if (!audioBuffer && req.user.voiceSample && voiceType === 'cloned') {
+            audioBuffer = await VoiceCloningService.coquiClone(text, req.user.voiceSample);
+        }
+
+        // If still no audio, use Web Speech (browser-side)
+        if (!audioBuffer) {
+            // Return response for browser TTS
+            return res.json({ 
+                success: true, 
+                useBrowserTTS: true,
+                text: text,
+                voiceSettings: req.user.voiceSettings || { speed: 1, pitch: 1, volume: 1 }
+            });
+        }
+
+        // Send audio file
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Disposition', 'attachment; filename=speech.wav');
+        res.send(audioBuffer);
+
+    } catch (error) {
+        console.error('TTS error:', error);
+        // Fallback to browser TTS
+        res.json({ 
+            success: true, 
+            useBrowserTTS: true,
+            text: req.body.text,
+            voiceSettings: req.user.voiceSettings || { speed: 1, pitch: 1, volume: 1 }
+        });
+    }
+});
+
+// Update Voice Settings
+app.put('/api/voice/settings', authenticateToken, async (req, res) => {
+    try {
+        const { speed, pitch, volume, voiceType } = req.body;
+        
+        if (speed !== undefined) req.user.voiceSettings.speed = speed;
+        if (pitch !== undefined) req.user.voiceSettings.pitch = pitch;
+        if (volume !== undefined) req.user.voiceSettings.volume = volume;
+        if (voiceType) req.user.voiceSettings.voiceType = voiceType;
+
+        await req.user.save();
+        
+        res.json({ 
+            success: true, 
+            voiceSettings: req.user.voiceSettings 
+        });
+    } catch (error) {
+        console.error('Voice settings error:', error);
+        res.status(500).json({ success: false, message: 'Failed to update voice settings' });
     }
 });
 
@@ -374,7 +592,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 });
 
-// Voice
+// Voice command
 app.post('/api/voice', authenticateToken, async (req, res) => {
     try {
         const { text } = req.body;
@@ -448,7 +666,8 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
                 email: req.user.email,
                 joined: req.user.createdAt,
                 stats: req.user.stats,
-                settings: req.user.settings
+                settings: req.user.settings,
+                voiceSettings: req.user.voiceSettings || { speed: 1, pitch: 1, volume: 1, voiceType: 'default' }
             }
         });
     } catch (error) {
@@ -493,11 +712,13 @@ wss.on('connection', (ws) => {
 // ========== START SERVER ==========
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    ╔═══════════════════════════════════════╗
-    ║  🚀 JARVIS PRO SERVER RUNNING        ║
-    ║  📡 Port: ${PORT}                      ║
-    ║  🌐 URL: http://0.0.0.0:${PORT}       ║
-    ║  🔌 WebSocket: ws://0.0.0.0:${PORT}   ║
-    ╚═══════════════════════════════════════╝
+    ╔═══════════════════════════════════════════════════════╗
+    ║  🚀 MUHAMMAD'S JARVIS PRO SERVER RUNNING             ║
+    ║  📡 Port: ${PORT}                                    ║
+    ║  🌐 URL: http://0.0.0.0:${PORT}                     ║
+    ║  🔌 WebSocket: ws://0.0.0.0:${PORT}                 ║
+    ║  🎤 Voice Cloning: ENABLED                          ║
+    ║  👤 Owner: Muhammad                                 ║
+    ╚═══════════════════════════════════════════════════════╝
     `);
 });
